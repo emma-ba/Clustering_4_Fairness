@@ -1,0 +1,7 @@
+numpy
+matplotlib
+scikit-learn
+umap-learn
+hdbscan
+cornac
+kmodes                                                                                                                                        
