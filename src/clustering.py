@@ -92,16 +92,18 @@ def cluster(
     y_true: Optional[np.ndarray] = None,
     y_pred: Optional[np.ndarray] = None,
     subset: Optional[Literal["TP", "TN", "FP", "FN", "TP_TN", "FP_FN"]] = None,
-    algorithm: Literal["dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kprototypes"] = "hdbscan", 
+    algorithm: Literal["dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kprototypes"] = "hdbscan",
     distance: Literal["euclidean", "manhattan", "gower"] = "euclidean",
     categorical_features: Optional[list[int]] = None,
     feature_weights: Optional[Union[np.ndarray, dict]] = None,
-    eps:float = 0.5,
+    eps: float = 0.5,
     min_cluster_size: int = 50,
     min_samples: int = 10,
     n_clusters: Optional[int] = None,
     n_min: Optional[int] = None,
     n_max: Optional[int] = None,
+    max_iter: int = 300,
+    random_state: int = 42,
     standardize: bool = True,
 ) -> ClusteringResult:
     """
@@ -138,6 +140,14 @@ def cluster(
         Minimum samples in neighborhood (for HDBSCAN).
     n_clusters : int, optional
         Number of clusters (for KMeans, Agglomerative).
+    n_min : int, optional
+        Minimum number of clusters for range-based search.
+    n_max : int, optional
+        Maximum number of clusters for range-based search.
+    max_iter : int, default=300
+        Maximum number of iterations for KMeans/BisectingKMeans.
+    random_state : int, default=42
+        Random seed for reproducibility.
     standardize : bool, default=True
         Whether to standardize numeric features before clustering.
 
@@ -216,9 +226,9 @@ def cluster(
             )
             labels = clusterer.fit_predict(dist_matrix)
         elif distance in ("euclidean", "manhattan"):
-            clusterer = HDBSCAN(
-                eps=eps,                      
-                min_samples=min_samples,     
+            clusterer = DBSCAN(
+                eps=eps,
+                min_samples=min_samples,
                 metric=distance,
             )
             labels = clusterer.fit_predict(X)
@@ -246,57 +256,57 @@ def cluster(
             labels = clusterer.fit_predict(X)
 
 
-    elif algorithm == "kmeans":                                                                                                                                                         
-        if n_clusters is not None:                                                                                                                                                      
-            clusterer = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)                                                                                                       
-            labels = clusterer.fit_predict(X)                                                                                                                                           
-        elif n_min is not None and n_max is not None:                                                                                                                                   
-            best_score, best_k, best_labels = -1, n_min, None                                                                                                                           
-            for k in range(n_min, n_max + 1):                                                                                                                                           
-                clusterer = KMeans(n_clusters=k, random_state=42, n_init=10)                                                                                                            
-                labels = clusterer.fit_predict(X)                                                                                                                                       
-                score = silhouette_score(X, labels)                                                                                                                                     
-                if score > best_score:                                                                                                                                                  
-                    best_score, best_k, best_labels = score, k, labels   
-            print(f"  Best k={best_k} (silhouette={best_score:.3f})")                                                                                                           
-            labels = best_labels                                                                                                                                                        
-        else:                                                                                                                                                                           
+    elif algorithm == "kmeans":
+        if n_clusters is not None:
+            clusterer = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)
+            labels = clusterer.fit_predict(X)
+        elif n_min is not None and n_max is not None:
+            best_score, best_k, best_labels = -1, n_min, None
+            for k in range(n_min, n_max + 1):
+                clusterer = KMeans(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
+                labels = clusterer.fit_predict(X)
+                score = silhouette_score(X, labels)
+                if score > best_score:
+                    best_score, best_k, best_labels = score, k, labels
+            print(f"  Best k={best_k} (silhouette={best_score:.3f})")
+            labels = best_labels
+        else:
             raise ValueError("n_clusters or n_min/n_max required for kmeans")                                                                                                           
                                                                                                                                                                                           
-    elif algorithm == "bisectingkmeans":                                                                                                                                                
-        if n_clusters is not None:                                                                                                                                                      
-            clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=42)                                                                                                         
-            labels = clusterer.fit_predict(X)                                                                                                                                           
-        elif n_min is not None and n_max is not None:                                                                                                                                   
-            best_score, best_k, best_labels = -1, n_min, None                                                                                                                           
-            for k in range(n_min, n_max + 1):                                                                                                                                           
-                clusterer = BisectingKMeans(n_clusters=k, random_state=42)                                                                                                              
-                labels = clusterer.fit_predict(X)                                                                                                                                       
-                score = silhouette_score(X, labels)                                                                                                                                     
-                if score > best_score:                                                                                                                                                  
+    elif algorithm == "bisectingkmeans":
+        if n_clusters is not None:
+            clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
+            labels = clusterer.fit_predict(X)
+        elif n_min is not None and n_max is not None:
+            best_score, best_k, best_labels = -1, n_min, None
+            for k in range(n_min, n_max + 1):
+                clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
+                labels = clusterer.fit_predict(X)
+                score = silhouette_score(X, labels)
+                if score > best_score:
                     best_score, best_k, best_labels = score, k, labels
-            print(f"  Best k={best_k} (silhouette={best_score:.3f})")                                                                                                                  
-            labels = best_labels                                                                                                                                                        
-        else:                                                                                                                                                                           
+            print(f"  Best k={best_k} (silhouette={best_score:.3f})")
+            labels = best_labels
+        else:
             raise ValueError("n_clusters or n_min/n_max required for bisectingkmeans")
-    elif algorithm == "kprototypes":                                                                                                                                                    
-          if categorical_features is None or len(categorical_features) == 0:                                                                                                              
-              raise ValueError("kprototypes requires categorical_features to be specified")                                                                                               
-          if n_clusters is not None:                                                                                                                                                      
-              clusterer = KPrototypes(n_clusters=n_clusters, random_state=42, n_init=10)                                                                                                  
-              labels = clusterer.fit_predict(X, categorical=categorical_features)                                                                                                         
-          elif n_min is not None and n_max is not None:                                                                                                                                   
-              best_score, best_labels = -1, None                                                                                                                                          
-              for k in range(n_min, n_max + 1):                                                                                                                                           
-                  clusterer = KPrototypes(n_clusters=k, random_state=42, n_init=10)                                                                                                       
-                  labels = clusterer.fit_predict(X, categorical=categorical_features)                                                                                                     
-                  score = silhouette_score(X, labels)                                                                                                                                     
-                  if score > best_score:                                                                                                                                                  
-                      best_score, best_labels = score, labels                                                                                                                             
-              print(f"  Best k={k} (silhouette={best_score:.3f})")                                                                                                                        
-              labels = best_labels                                                                                                                                                        
-          else:                                                                                                                                                                           
-              raise ValueError("n_clusters or n_min/n_max required for kprototypes")
+    elif algorithm == "kprototypes":
+        if categorical_features is None or len(categorical_features) == 0:
+            raise ValueError("kprototypes requires categorical_features to be specified")
+        if n_clusters is not None:
+            clusterer = KPrototypes(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)
+            labels = clusterer.fit_predict(X, categorical=categorical_features)
+        elif n_min is not None and n_max is not None:
+            best_score, best_labels = -1, None
+            for k in range(n_min, n_max + 1):
+                clusterer = KPrototypes(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
+                labels = clusterer.fit_predict(X, categorical=categorical_features)
+                score = silhouette_score(X, labels)
+                if score > best_score:
+                    best_score, best_labels = score, labels
+            print(f"  Best k={k} (silhouette={best_score:.3f})")
+            labels = best_labels
+        else:
+            raise ValueError("n_clusters or n_min/n_max required for kprototypes")
     
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")

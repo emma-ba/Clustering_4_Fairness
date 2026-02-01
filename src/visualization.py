@@ -15,7 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import umap
 from typing import Optional, Literal, Union
-from clustering import ClusteringResult
+from .clustering import ClusteringResult
 
 
 def reduce_dimensions(
@@ -354,3 +354,138 @@ def visualize_clustering_result(
         )
 
     return figures
+
+
+def plot_silhouette_heatmap(
+    silhouette_values: np.ndarray,
+    row_labels: list,
+    title: str = "Silhouette Scores",
+    out_path: Optional[str] = None,
+    figsize: tuple = (4, 6),
+) -> plt.Figure:
+    """
+    Plot silhouette scores as a heatmap with inverted colors.
+
+    Parameters
+    ----------
+    silhouette_values : np.ndarray
+        Array of silhouette scores.
+    row_labels : list
+        Labels for each row (e.g., experimental conditions).
+    title : str, default="Silhouette Scores"
+        Plot title.
+    out_path : str, optional
+        Path to save the figure.
+    figsize : tuple, default=(4, 6)
+        Figure size.
+
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure object.
+    """
+    import seaborn as sns
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Use reversed colormap so higher=blue (better)
+    # vlag_r is the reversed version of vlag
+    data = np.array(silhouette_values).reshape(-1, 1)
+
+    sns.heatmap(
+        data,
+        annot=True,
+        fmt=".3f",
+        center=0,
+        cbar=True,
+        cmap="Blues",  # Blue colormap: higher values = darker blue = better
+        ax=ax,
+        yticklabels=row_labels,
+        xticklabels=["silhouette"],
+    )
+
+    ax.set_title(title)
+    ax.tick_params(axis='y', rotation=0)
+
+    plt.tight_layout()
+
+    if out_path:
+        fig.savefig(out_path, dpi=300, bbox_inches='tight')
+
+    return fig
+
+
+def plot_quality_metrics_heatmap(
+    metrics_df,
+    title: str = "Quality Metrics",
+    out_path: Optional[str] = None,
+    figsize: tuple = (8, 6),
+    silhouette_col: str = "silhouette",
+) -> plt.Figure:
+    """
+    Plot quality metrics heatmap with special handling for silhouette.
+
+    Parameters
+    ----------
+    metrics_df : pd.DataFrame
+        DataFrame with quality metrics. Index should be condition names.
+    title : str, default="Quality Metrics"
+        Plot title.
+    out_path : str, optional
+        Path to save the figure.
+    figsize : tuple, default=(8, 6)
+        Figure size.
+    silhouette_col : str, default="silhouette"
+        Name of the silhouette column.
+
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure object.
+    """
+    import seaborn as sns
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize,
+                             gridspec_kw={'width_ratios': [4, 1]})
+
+    # Left: p-value columns (lower=better, use vlag centered at 0.05)
+    pval_cols = [c for c in metrics_df.columns if c != silhouette_col]
+    if pval_cols:
+        sns.heatmap(
+            metrics_df[pval_cols],
+            annot=True,
+            fmt=".4f",
+            center=0.05,
+            cbar=False,
+            cmap=sns.color_palette("vlag", as_cmap=True),
+            ax=axes[0],
+            robust=True,
+        )
+        axes[0].set_title("P-values (lower=better)")
+        axes[0].xaxis.tick_top()
+        axes[0].tick_params(axis='x', which='major', length=0)
+        axes[0].tick_params(axis='y', which='major', length=0, pad=5)
+
+    # Right: silhouette column (higher=better, use Blues)
+    if silhouette_col in metrics_df.columns:
+        sns.heatmap(
+            metrics_df[[silhouette_col]],
+            annot=True,
+            fmt=".3f",
+            cbar=False,
+            cmap="Blues",  # Higher=darker blue=better
+            ax=axes[1],
+            yticklabels=False,
+        )
+        axes[1].set_title("Silhouette\n(higher=better)")
+        axes[1].xaxis.tick_top()
+        axes[1].tick_params(axis='x', which='major', length=0)
+        axes[1].tick_params(axis='y', which='major', length=0)
+
+    fig.suptitle(title, y=1.02)
+    plt.tight_layout()
+
+    if out_path:
+        fig.savefig(out_path, dpi=300, bbox_inches='tight')
+
+    return fig

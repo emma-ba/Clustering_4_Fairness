@@ -23,7 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Clustering for fairness analysis")
     
     parser.add_argument("--algorithm", type=str, default="hdbscan",
-                        choices=["dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kprototype"],
+                        choices=["dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kprototypes"],
                         help="Clustering algorithm")
 
     # Distance metric
@@ -43,11 +43,15 @@ def parse_args():
                         help="Maximum distance between samples for neighborhood (DBSCAN)")
     
     # HDBSCAN parameters
-    # TODO also add k_prototype (somethign else, like K-means, but doens't work well on a mix of cat/num)
     parser.add_argument("--min_cluster_size", type=int, default=15,
                         help="Minimum cluster size (HDBSCAN)")
     parser.add_argument("--min_samples", type=int, default=5,
                         help="Minimum samples (HDBSCAN)")
+
+    parser.add_argument("--max_iter", type=int, default=300,
+                        help="Maximum iterations for KMeans/BisectingKMeans")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
 
     # Feature weights
     parser.add_argument("--weight_gender", type=float, default=1.0,
@@ -141,13 +145,15 @@ def main():
         subset=args.subset,
         algorithm=args.algorithm,
         distance=args.distance,
-        categorical_features=categorical_features if categorical_features else None,                                                                                                    
-        eps=args.eps,                                                                                                                                                                   
-        min_cluster_size=args.min_cluster_size,                                                                                                                                         
-        min_samples=args.min_samples,                                                                                                                                                   
-        n_clusters=args.n_clusters,                                                                                                                                                     
-        n_min=args.n_min,                                                                                                                                                               
+        categorical_features=categorical_features if categorical_features else None,
+        eps=args.eps,
+        min_cluster_size=args.min_cluster_size,
+        min_samples=args.min_samples,
+        n_clusters=args.n_clusters,
+        n_min=args.n_min,
         n_max=args.n_max,
+        max_iter=args.max_iter,
+        random_state=args.seed,
     )
 
     # Results
