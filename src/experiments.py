@@ -33,7 +33,7 @@ BASIC_COL = ['age', 'decile_score', 'priors_count']
 DUMMY_COL = ['sex_Female','race_African-American', 'race_Caucasian', 'race_Asian', 'race_Hispanic',
                       'race_Native American', 'race_Other']
 
-ERROR_COL_scaled = ['errors_scaled']
+ERROR_COL_scaled = ['errors']  # Using unscaled errors column (binary 0/1)
 BASIC_COL_scaled = ['age_scaled', 'decile_score_scaled', 'priors_count_scaled']
 DUMMY_COL_scaled = ['sex_Female_scaled', 'race_Native American_scaled','race_Other_scaled',
                 'race_African-American_scaled', 'race_Asian_scaled', 'race_Caucasian_scaled', 'race_Hispanic_scaled']
