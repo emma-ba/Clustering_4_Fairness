@@ -278,16 +278,16 @@ def main():
 
     # Experiment mode: run all 18 conditions
     if args.experiment:
-        timestamp = datetime.now().strftime('%H-%M-%S')
-        output_dir = os.path.join(args.output_dir, f"experiment_{dataset_name}_{timestamp}")
+        full_timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}")
         os.makedirs(output_dir, exist_ok=True)
         run_batch_experiment(df, args, output_dir)
         print("\nDone.")
         return
 
     # Single run mode
-    timestamp = datetime.now().strftime('%H-%M-%S')
-    run_id = f"{dataset_name}_{args.algorithm}_{args.distance}_{timestamp}"
+    full_timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    run_id = f"{full_timestamp}_{dataset_name}_{args.algorithm}_{args.distance}"
     output_dir = os.path.join(args.output_dir, run_id)
     os.makedirs(output_dir, exist_ok=True)
 
