@@ -13,14 +13,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-import umap
+# UMAP disabled - use tsne or pca instead
+# import umap
 from typing import Optional, Literal, Union
 from .clustering import ClusteringResult
 
-
+# NOTE: Use PCA when visualizing KMeans/BisectingKMeans results - PCA is a linear projection that preserves Euclidean distances (same metric KMeans uses). Use t-SNE when visualizing HDBSCAN/DBSCAN results - t-SNE preserves local neighborhood structure (same as density-based algorithms).  Mixing these (e.g., t-SNE for KMeans) will show misleading cluster boundaries because the projection uses different distance concepts than the algorithm. 
 def reduce_dimensions(
     X: np.ndarray,
-    method: Literal["umap", "pca", "tsne"] = "umap",
+    method: Literal["pca", "tsne"] = "tsne",
     n_components: int = 2,
     random_state: int = 42,
 ) -> np.ndarray:
@@ -31,8 +32,9 @@ def reduce_dimensions(
     ----------
     X : np.ndarray
         Feature matrix of shape (n_samples, n_features).
-    method : {"umap", "pca", "tsne"}, default="umap"
+    method : {"pca", "tsne"}, default="tsne"
         Dimensionality reduction method.
+        Note: UMAP is disabled. Use 'tsne' or 'pca' instead.
     n_components : int, default=2
         Number of output dimensions.
     random_state : int, default=42
@@ -46,12 +48,15 @@ def reduce_dimensions(
     if method == "pca":
         reducer = PCA(n_components=n_components, random_state=random_state)
     elif method == "umap":
-        reducer = umap.UMAP(
-            n_neighbors=15,
-            min_dist=0.1,
-            n_components=n_components,
-            random_state=random_state,
-        )
+        # UMAP is disabled - use tsne or pca instead
+        # To re-enable: uncomment 'import umap' at top and the code below
+        # reducer = umap.UMAP(
+        #     n_neighbors=15,
+        #     min_dist=0.1,
+        #     n_components=n_components,
+        #     random_state=random_state,
+        # )
+        raise ValueError("UMAP is disabled. Use 'tsne' or 'pca' instead.")
     elif method == "tsne":
         reducer = TSNE(
             n_components=n_components,
@@ -59,7 +64,7 @@ def reduce_dimensions(
             perplexity=30,
         )
     else:
-        raise ValueError(f"Unknown method: {method}")
+        raise ValueError(f"Unknown method: {method}. Use 'tsne' or 'pca'.")
 
     return reducer.fit_transform(X)
 

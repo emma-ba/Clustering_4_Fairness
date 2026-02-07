@@ -105,6 +105,7 @@ def cluster(
     max_iter: int = 300,
     random_state: int = 42,
     standardize: bool = True,
+    min_datapoints: Optional[int] = None,
 ) -> ClusteringResult:
     """
     Perform clustering on features with flexible configuration.
@@ -196,12 +197,12 @@ def cluster(
         else:
             weights = np.asarray(feature_weights)
 
-    # Standardize numeric features
-    if standardize and distance != "gower":
+    # Standardize numeric features (skip for kprototypes which handles mixed types internally)
+    if standardize and distance != "gower" and algorithm != "kprototypes":
         if categorical_features:
             numeric_mask = [i for i in range(X.shape[1]) if i not in categorical_features]
             scaler = StandardScaler()
-            X[:, numeric_mask] = scaler.fit_transform(X[:, numeric_mask])
+            X[:, numeric_mask] = scaler.fit_transform(X[:, numeric_mask].astype(float))
         else:
             scaler = StandardScaler()
             X = scaler.fit_transform(X)
@@ -210,7 +211,6 @@ def cluster(
     if weights is not None and distance != "gower":
         X = X * np.sqrt(weights)
 
-    # Perform clustering
     if algorithm == "dbscan":
         if distance == "gower":
             """ 
@@ -232,7 +232,6 @@ def cluster(
                 metric=distance,
             )
             labels = clusterer.fit_predict(X)
-        
     elif algorithm == "hdbscan":
         if distance == "gower":
             """ 
@@ -272,13 +271,17 @@ def cluster(
             labels = best_labels
         else:
             raise ValueError("n_clusters or n_min/n_max required for kmeans")                                                                                                           
-                                                                                                                                                                                          
+# TODO: Look into papers as to how they implemented bisectingkmeans. Pour compenser le pb de kmeans. Peutetre qu'il n'y aurait pas de sens de faire du bisecting, en concordance avec la recherche. Mitzal Radecka - papiers. 
     elif algorithm == "bisectingkmeans":
         if n_clusters is not None:
             clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X)
         elif n_min is not None and n_max is not None:
             best_score, best_k, best_labels = -1, n_min, None
+            # TODO: quand on fait des clusters de fairness, on peut avoir d'autres criteres - si cela separe bien les erreurs, et pas seulement le silhouette score. 
+            # TODO: Garder cetter fonction qui fait une iteraction, et garder l'option de faire le hyperparamter tuning, et avoir une option e donner le critere. 
+            # TODO: Don't forget to include chi square test, ANOVA (pense a commment integrer ca pour choisir le best_k, KPrototypes -> + tard)
+            # TODO: Include the rest of the tables from notebook.
             for k in range(n_min, n_max + 1):
                 clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X)
@@ -290,6 +293,12 @@ def cluster(
         else:
             raise ValueError("n_clusters or n_min/n_max required for bisectingkmeans")
     elif algorithm == "kprototypes":
+        # NOTE: KPrototypes uses its own internal distance metric (Huang's cost function):
+        #   - Numeric features: squared Euclidean distance
+        #   - Categorical features: simple matching dissimilarity (0 if match, 1 otherwise)
+        # Gower distance is not compatible with KPrototypes.
+        # For Gower-based mixed-type clustering, use DBSCAN or HDBSCAN with --distance gower.
+        # Future: KMedoids with precomputed Gower matrix could provide centroid-based + Gower.
         if categorical_features is None or len(categorical_features) == 0:
             raise ValueError("kprototypes requires categorical_features to be specified")
         if n_clusters is not None:
@@ -311,19 +320,32 @@ def cluster(
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")
 
+    # Filter small clusters to noise if min_datapoints is set
+    if min_datapoints is not None:
+        for label in set(labels):
+            if label == -1:
+                continue
+            cluster_count = (labels == label).sum()
+            if cluster_count < min_datapoints:
+                labels = np.where(labels == label, -1, labels)
+
     # Compute evaluation metrics
     unique_labels = set(labels)
     n_clusters = len(unique_labels - {-1})
     n_noise = (labels == -1).sum()
 
-    # Silhouette and Calinski-Harabasz require at least 2 clusters
+    # Silhouette and Calinski-Harabasz require at least 2 clusters and numeric data
     silhouette = None
     calinski = None
     if n_clusters >= 2:
         non_noise_mask = labels != -1
         if non_noise_mask.sum() > n_clusters:
-            silhouette = silhouette_score(X[non_noise_mask], labels[non_noise_mask])
-            calinski = calinski_harabasz_score(X[non_noise_mask], labels[non_noise_mask])
+            # Skip metrics for mixed-type data (kprototypes or gower with categoricals)
+            if categorical_features and (algorithm == "kprototypes" or distance == "gower"):
+                pass  # Cannot compute silhouette on mixed data
+            else:
+                silhouette = silhouette_score(X[non_noise_mask], labels[non_noise_mask])
+                calinski = calinski_harabasz_score(X[non_noise_mask], labels[non_noise_mask])
 
     # Compute cluster sizes
     cluster_sizes = {}

@@ -51,9 +51,9 @@ SHAP_DUMMY_scaled = ['Shap_sex_Female_scaled','Shap_race_African-American_scaled
 SHAP_DUMMY_scaled_light = ['Shap_sex_Female_scaled','Shap_race_African-American_scaled','Shap_race_Caucasian_scaled']
 
 
-# TODO C'est mieux de le laisser comme c'est, ne pas les transformer en dummy features. Si on utilise le gower distance, cela ne sera pas dans notre faveur. Apres les gens auront moins de data preparation. On peut demander au gens de nomer les types de data dans chaque. Mettre un peux les noms de coté.
+#  C'est mieux de le laisser comme c'est, ne pas les transformer en dummy features. Si on utilise le gower distance, cela ne sera pas dans notre faveur. Apres les gens auront moins de data preparation. On peut demander au gens de nomer les types de data dans chaque. Mettre un peux les noms de coté.
 #
-# TODO: Mais on a besoin que les gens nomment les colomnes par rapport au sens qu'on leur donne. Regular/sensitive/proxy/special (SHAP_*)
+# : Mais on a besoin que les gens nomment les colomnes par rapport au sens qu'on leur donne. Regular/sensitive/proxy/special (SHAP_*)
 
 # TODO: La fonction sera principalement pour faire de la recherche, alors ca va si on a cette complexité.
 
@@ -378,6 +378,78 @@ def make_recap(data_result, feature_set):
 
 
 # =============================================================================
+# Utils for Results - Separability Check (Chi-squared / Kruskal-Wallis)
+# =============================================================================
+
+def separability_check(data, labels, columns):
+    """
+    Test if clusters are significantly different across features.
+
+    Uses appropriate statistical test based on data type:
+    - Categorical (object, category, bool): Chi-squared test
+    - Numeric: Kruskal-Wallis test (non-parametric ANOVA)
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Data with features to test.
+    labels : np.ndarray
+        Cluster labels for each row.
+    columns : list
+        Column names to test.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns: test, statistic, p_value
+        Index is column names.
+    """
+    from scipy.stats import kruskal
+
+    results = {}
+    unique_labels = [l for l in np.unique(labels) if l != -1]
+
+    # Filter to non-noise points
+    mask = labels != -1
+    data_filtered = data[mask]
+    labels_filtered = labels[mask]
+
+    if len(unique_labels) < 2:
+        # Need at least 2 clusters for comparison
+        return pd.DataFrame(columns=['test', 'statistic', 'p_value'])
+
+    for col in columns:
+        if col not in data.columns:
+            continue
+
+        col_data = data_filtered[col]
+
+        if col_data.dtype in ['object', 'category', 'bool'] or col_data.dtype.name == 'category':
+            # Chi-squared for categorical
+            try:
+                contingency = pd.crosstab(col_data, labels_filtered)
+                stat, p, dof, expected = chi2_contingency(contingency)
+                results[col] = {'test': 'chi2', 'statistic': round(stat, 4), 'p_value': round(p, 6)}
+            except Exception as e:
+                results[col] = {'test': 'chi2', 'statistic': np.nan, 'p_value': np.nan}
+        else:
+            # Kruskal-Wallis for numeric (non-parametric ANOVA)
+            try:
+                groups = [data_filtered[labels_filtered == l][col].dropna().values for l in unique_labels]
+                # Filter out empty groups
+                groups = [g for g in groups if len(g) > 0]
+                if len(groups) >= 2:
+                    stat, p = kruskal(*groups)
+                    results[col] = {'test': 'kruskal', 'statistic': round(stat, 4), 'p_value': round(p, 6)}
+                else:
+                    results[col] = {'test': 'kruskal', 'statistic': np.nan, 'p_value': np.nan}
+            except Exception as e:
+                results[col] = {'test': 'kruskal', 'statistic': np.nan, 'p_value': np.nan}
+
+    return pd.DataFrame(results).T
+
+
+# =============================================================================
 # Utils for Results - Chi-Square Tests
 # =============================================================================
 
@@ -531,7 +603,7 @@ def plot_quality_heatmap(all_quali_viz, output_path, figsize=(4,4)):
   """
   Plot quality metrics heatmap.
 
-  TODO 14: For silhouette, higher=better, so color should be inverse (blue instead of red).
+  For silhouette, higher=better, so color should be inverse (blue instead of red).
   """
   plt.figure(figsize=figsize)
   ax = sns.heatmap(all_quali_viz, annot=True, center=0, cbar=False,
@@ -541,8 +613,7 @@ def plot_quality_heatmap(all_quali_viz, output_path, figsize=(4,4)):
   ax.tick_params(axis='x', which='major', length=0)
   ax.tick_params(axis='y', which='major', pad=150, length=0)
   plt.yticks(ha='left')
-  plt.savefig(output_path, bbox_inches='tight', pad_inches=0)
-  plt.show()
+  plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0)
 
 
 def plot_cluster_recap_heatmap(recap, cond_name, output_dir):
@@ -562,8 +633,7 @@ def plot_cluster_recap_heatmap(recap, cond_name, output_dir):
   ax.tick_params(axis='y', which='major', length=0)
   ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='left', rotation_mode='anchor')
   plt.yticks(rotation='horizontal')
-  plt.savefig(f'{output_dir}/'+re.sub(' +', '', cond_name)+'.png', bbox_inches='tight', pad_inches=0)
-  plt.show()
+  plt.savefig(f'{output_dir}/'+re.sub(' +', '', cond_name)+'.png', dpi=300, bbox_inches='tight', pad_inches=0)
 
 
 # =============================================================================
@@ -671,7 +741,7 @@ def create_default_exp_conditions():
   """
   Create default experimental conditions for COMPAS dataset.
 
-  # TODO 12: Define column groups for exp_condition (regular + sensitive + any_column)
+  Define column groups for exp_condition (regular + sensitive + any_column)
 
   Returns
   -------
