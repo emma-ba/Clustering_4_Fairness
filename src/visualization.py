@@ -18,7 +18,7 @@ from sklearn.manifold import TSNE
 from typing import Optional, Literal, Union
 from .clustering import ClusteringResult
 
-# NOTE: Use PCA when visualizing KMeans/BisectingKMeans results - PCA is a linear projection that preserves Euclidean distances (same metric KMeans uses). Use t-SNE when visualizing HDBSCAN/DBSCAN results - t-SNE preserves local neighborhood structure (same as density-based algorithms).  Mixing these (e.g., t-SNE for KMeans) will show misleading cluster boundaries because the projection uses different distance concepts than the algorithm. 
+# NOTE: Use PCA when visualizing KMeans/BisectingKMeans results - PCA is a linear projection that preserves Euclidean distances (same metric KMeans uses). Use t-SNE when visualizing HDBSCAN/DBSCAN results - t-SNE preserves local neighborhood structure (same as density-based algorithms).  Mixing these (e.g. TSNE for KMeans) will show misleading cluster boundaries because the projection uses different distance concepts than the algorithm. 
 def reduce_dimensions(
     X: np.ndarray,
     method: Literal["pca", "tsne"] = "tsne",
@@ -34,7 +34,7 @@ def reduce_dimensions(
         Feature matrix of shape (n_samples, n_features).
     method : {"pca", "tsne"}, default="tsne"
         Dimensionality reduction method.
-        Note: UMAP is disabled. Use 'tsne' or 'pca' instead.
+        Note: TSEN or PCA
     n_components : int, default=2
         Number of output dimensions.
     random_state : int, default=42

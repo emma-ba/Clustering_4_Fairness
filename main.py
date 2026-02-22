@@ -2,10 +2,15 @@ import os, argparse, sys
 import numpy as np
 import pandas as pd
 from src.clustering import cluster
+from src.scoring import (
+    silhouette_scorer, make_chi2_error_scorer,
+    make_chi2_sensitive_scorer, make_composite_scorer,
+)
 from src.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
 from src.fairness_metrics import evaluate_fairness, print_fairness_report
 from src.experiments import (
-    create_default_exp_conditions, run_experiments, make_chi_tests,
+    create_default_exp_conditions, create_exp_conditions,
+    run_experiments, make_chi_tests,
     recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap
 )
 from datetime import datetime
@@ -66,7 +71,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Clustering for fairness analysis")
     
     parser.add_argument("--algorithm", type=str, default="hdbscan",
-                        choices=["dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kprototypes"],
+                        choices=["dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kmedoids", "kprototypes"],
                         help="Clustering algorithm")
 
     # Distance metric
@@ -81,20 +86,34 @@ def parse_args():
     parser.add_argument("--n_max", type=int, default=10,
                         help="Maximum number of clusters (for range-based search")
 
-    # DBSCAN parameters                                                                                                                                                                 
+#DBSCAN parameters                                                                                                                                                          
     parser.add_argument("--eps", type=float, default=0.5,                                                                                                                               
                         help="Maximum distance between samples for neighborhood (DBSCAN)")
     
     # HDBSCAN parameters
+    # Note: For a general minimum cluster size filter across all algorithms, use --min_datapoints (post-hoc filter).
+    # min_cluster_size is HDBSCAN-specific (built-in parameter controlling hierarchical extraction).
     parser.add_argument("--min_cluster_size", type=int, default=15,
                         help="Minimum cluster size (HDBSCAN)")
+    
     parser.add_argument("--min_samples", type=int, default=5,
                         help="Minimum samples (HDBSCAN)")
+    # General parameters
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility (used by KMeans, BisectingKMeans, KMedoids, KPrototypes, and experiment mode)")
+    parser.add_argument("--seeds", type=str, default=None,
+                        help="Comma-separated seeds for multi-seed experiments (e.g., '42,123,456'). Mutually exclusive with --seed in experiment mode.")
 
+    # KMeans parameters
     parser.add_argument("--max_iter", type=int, default=300,
                         help="Maximum iterations for KMeans/BisectingKMeans")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for reproducibility")
+
+    # Scoring method for k-selection
+    parser.add_argument("--scoring", type=str, default="silhouette",
+                        choices=["silhouette", "chi2_error", "chi2_sensitive", "composite"],
+                        help="Scoring method for k-search: silhouette (cluster quality), chi2_error (error separation), chi2_sensitive (fairness), composite (weighted combination)")
+    parser.add_argument("--composite_weights", type=str, default="silhouette:0.3,error:0.5,fairness:0.2",
+                        help="Weights for composite scoring as 'silhouette:W,error:W,fairness:W'")
 
     # Feature weights
     parser.add_argument("--feature_weights", type=str, default=None,
@@ -122,22 +141,16 @@ def parse_args():
                         choices=["pca", "tsne"],
                         help="Projection method for visualization (UMAP disabled)")
 
-    # What to cluster
-    # : Remove for now (we'll see)
-    # parser.add_argument("--target", type=str, default="users",
-    #                     choices=["users", "items"],
-    #                     help="Cluster users or items")
-
-    #  Faudrait que les gens puissent donner une liste avec les noms de colomnes pour chaque categorie qu'on a Regular/sensitive/proxy et toutes peuvent etre vides. (special on met dans les exp_condition)
     parser.add_argument("--regular_cols", type=str, default=None,                                                                                                                       
                           help="Regular features for clustering (comma-separated column names)")                                                                                          
-    parser.add_argument("--sensitive_cols", type=str, default=None,                                                                                                                     
-                        help="Sensitive/protected attributes (comma-separated column names)")                                                                                           
+    parser.add_argument("--sensitive_cols", type=str, default=None,
+                        help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")                                                                                           
     parser.add_argument("--proxy_cols", type=str, default=None,                                                                                                                         
                         help="Proxy features for sensitive attributes (comma-separated column names)")                                                                                  
-    parser.add_argument("--special_cols", type=str, default=None,                                                                                                                       
+    parser.add_argument("--special_cols", type=str, default=None,
                           help="Special features like SHAP values (comma-separated column names)")
-
+    parser.add_argument("--error_col", type=str, default=None,
+                        help="Binary error column for HBAC-DBSCAN splitting (required in experiment mode)")
 
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
@@ -149,21 +162,23 @@ def parse_args():
 
     # Batch experiment mode
     parser.add_argument("--experiment", action="store_true",
-                        help="Run batch experiment with all 18 COMPAS feature combinations")
+                        help="Run batch experiment with all feature group combinations")
 
     return parser.parse_args()
 
 
 def run_batch_experiment(df, args, output_dir):
     """
-    Run all 18 experimental conditions and generate outputs.
+    Run all experimental conditions and generate outputs.
+
+    Generates conditions from CLI column groups (generic, dataset-agnostic).
 
     Parameters
     ----------
     df : pd.DataFrame
         Input data with all required columns.
     args : argparse.Namespace
-        CLI arguments.
+        CLI arguments (must include error_col, sensitive_cols, etc.).
     output_dir : str
         Directory to save outputs.
 
@@ -178,9 +193,34 @@ def run_batch_experiment(df, args, output_dir):
     print("Running batch experiment...")
     print(f"  Dataset: {os.path.basename(args.data_path)}")
 
+    # Parse column groups from CLI
+    regular_cols = parse_column_list(args.regular_cols)
+    sensitive_cols = parse_column_list(args.sensitive_cols)
+    special_cols = parse_column_list(args.special_cols)
+    error_col = args.error_col
+
+    # Validate: need error_col and at least one feature group
+    if not error_col:
+        raise ValueError("--error_col is required in experiment mode")
+    if not regular_cols and not sensitive_cols and not special_cols:
+        raise ValueError("At least one feature group (--regular_cols, --sensitive_cols, or --special_cols) is required in experiment mode")
+    if not sensitive_cols:
+        raise ValueError("--sensitive_cols is required in experiment mode (for proportion analysis)")
+
+    # Build groups dict for condition generation
+    groups = {}
+    if regular_cols:
+        groups['REG'] = regular_cols
+    if sensitive_cols:
+        groups['SEN'] = sensitive_cols
+    groups['ERR'] = [error_col]
+    if special_cols:
+        groups['SPECIAL'] = special_cols
+
     # Create experimental conditions
-    exp_condition = create_default_exp_conditions()
+    exp_condition = create_exp_conditions(groups)
     print(f"  Conditions: {len(exp_condition)}")
+    print(f"  Groups: {list(groups.keys())}")
 
     # Save experimental conditions table
     exp_condition_save = exp_condition[['feature_set_descr', 'feature_set_name']].copy()
@@ -197,7 +237,9 @@ def run_batch_experiment(df, args, output_dir):
         min_acceptable_error_diff=0.005,
         max_iter=100,
         eps=1,
-        seed=args.seed
+        seed=args.seed,
+        sensitive_cols=sensitive_cols,
+        error_col=error_col
     )
 
     # Print progress for each condition
@@ -210,24 +252,26 @@ def run_batch_experiment(df, args, output_dir):
         print(f"  Clusters: {n_clusters}, Silhouette: {silhouette_avg:.3f}" if not np.isnan(silhouette_avg) else f"  Clusters: {n_clusters}")
 
     # Generate chi-squared test results
-    chi_res = make_chi_tests(results)
+    chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
     # Print chi-squared results summary
     print("\nChi-squared test results:")
-    chi_display = chi_res[['cond_name', 'error', 'race_aa', 'race_c', 'gender']].copy()
-    chi_display.columns = ['Condition', 'error', 'race_aa', 'race_c', 'gender']
+    chi_display_cols = ['cond_name', 'error'] + sensitive_cols
+    chi_display = chi_res[chi_display_cols].copy()
+    chi_display.columns = ['Condition', 'error'] + sensitive_cols
     print(chi_display.to_string(index=False))
 
     # Generate quality metrics
-    all_quali = recap_quali_metrics(chi_res, results, exp_condition)
+    all_quali = recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=sensitive_cols)
 
     # Create chi-squared heatmap visualization
-    chi_res_viz = chi_res[['error', 'race_aa', 'race_c', 'gender']].copy()
+    chi_viz_cols = ['error'] + sensitive_cols
+    chi_res_viz = chi_res[chi_viz_cols].copy()
     chi_res_viz.index = chi_res['cond_name'].str.strip()
 
-    plt.figure(figsize=(6, 10))
+    plt.figure(figsize=(max(4, len(chi_viz_cols) + 2), max(6, len(chi_res_viz) * 0.6)))
     ax = sns.heatmap(chi_res_viz, annot=True, center=0.05, cbar=False,
                      cmap=sns.color_palette("vlag", as_cmap=True), robust=True)
     ax.set_title("Chi-squared Test Results (p-values)")
@@ -241,9 +285,11 @@ def run_batch_experiment(df, args, output_dir):
     print(f"Saved: chi_res_heatmap.png")
 
     # Create quality metrics heatmap
-    all_quali_viz = all_quali[['error', 'race_aa', 'race_c', 'gender', 'silhouette']].copy()
+    quali_viz_cols = ['error'] + sensitive_cols + ['silhouette']
+    all_quali_viz = all_quali[quali_viz_cols].copy()
     all_quali_viz.index = all_quali['cond_name'].str.strip()
-    plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png", figsize=(6, 10))
+    plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png",
+                         figsize=(max(4, len(quali_viz_cols) + 2), max(6, len(all_quali_viz) * 0.6)))
     plt.close()
     print(f"Saved: all_quali_heatmap.png")
 
@@ -276,20 +322,100 @@ def main():
     print(f"Loading data...")
     df = pd.read_csv(args.data_path)
 
-    # Experiment mode: run all 18 conditions
+    # Experiment mode: run all conditions
     if args.experiment:
         full_timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}")
+
+        # Multi-seed experiment mode
+        if args.seeds:
+            seeds = [int(s.strip()) for s in args.seeds.split(',')]
+            base_output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_multi_seed")
+            os.makedirs(base_output_dir, exist_ok=True)
+
+            all_chi_res = []
+            all_silhouettes = []
+
+            for seed in seeds:
+                print(f"\n{'='*60}")
+                print(f"Running experiment with seed={seed}")
+                print(f"{'='*60}")
+                seed_dir = os.path.join(base_output_dir, f"seed_{seed}")
+                os.makedirs(seed_dir, exist_ok=True)
+                # Save per-seed metadata
+                metadata = pd.DataFrame([{
+                    'seed': seed,
+                    'algorithm': 'hbac_dbscan',
+                    'distance': 'euclidean',
+                    'dataset': dataset_name,
+                    'timestamp': full_timestamp,
+                    'scoring_method': 'N/A',
+                }])
+                metadata.to_csv(os.path.join(seed_dir, 'metadata.csv'), index=False)
+                args.seed = seed
+                run_batch_experiment(df, args, seed_dir)
+
+                # Collect chi_res for summary
+                chi_path = os.path.join(seed_dir, 'chi_res.csv')
+                if os.path.exists(chi_path):
+                    chi_df = pd.read_csv(chi_path)
+                    chi_df['seed'] = seed
+                    all_chi_res.append(chi_df)
+
+            # Generate cross-seed summary
+            if all_chi_res:
+                combined = pd.concat(all_chi_res, ignore_index=True)
+                # Compute mean/std of numeric columns grouped by condition
+                numeric_cols = [c for c in combined.columns if c not in ('cond_descr', 'cond_name', 'seed')]
+                summary_rows = []
+                for cond_name in combined['cond_name'].unique():
+                    cond_data = combined[combined['cond_name'] == cond_name]
+                    row = {'cond_name': cond_name}
+                    for col in numeric_cols:
+                        vals = cond_data[col].dropna()
+                        row[f'{col}_mean'] = vals.mean() if len(vals) > 0 else np.nan
+                        row[f'{col}_std'] = vals.std() if len(vals) > 1 else np.nan
+                    summary_rows.append(row)
+                summary_df = pd.DataFrame(summary_rows)
+                summary_df.to_csv(os.path.join(base_output_dir, 'cross_seed_summary.csv'), index=False)
+                print(f"\nCross-seed summary saved to: {base_output_dir}/cross_seed_summary.csv")
+
+            print("\nDone (multi-seed).")
+            return
+
+        # Single-seed experiment mode
+        output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_s{args.seed}")
         os.makedirs(output_dir, exist_ok=True)
+        # Save metadata
+        metadata = pd.DataFrame([{
+            'seed': args.seed,
+            'algorithm': 'hbac_dbscan',
+            'distance': 'euclidean',
+            'dataset': dataset_name,
+            'timestamp': full_timestamp,
+            'scoring_method': 'N/A',
+        }])
+        metadata.to_csv(os.path.join(output_dir, 'metadata.csv'), index=False)
         run_batch_experiment(df, args, output_dir)
         print("\nDone.")
         return
 
     # Single run mode
     full_timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    run_id = f"{full_timestamp}_{dataset_name}_{args.algorithm}_{args.distance}"
+    run_id = f"{full_timestamp}_{dataset_name}_{args.algorithm}_{args.distance}_s{args.seed}"
     output_dir = os.path.join(args.output_dir, run_id)
     os.makedirs(output_dir, exist_ok=True)
+
+    # Save metadata
+    scoring_method = getattr(args, 'scoring', 'silhouette')
+    metadata = pd.DataFrame([{
+        'seed': args.seed,
+        'algorithm': args.algorithm,
+        'distance': args.distance,
+        'dataset': dataset_name,
+        'timestamp': full_timestamp,
+        'scoring_method': scoring_method,
+    }])
+    metadata.to_csv(os.path.join(output_dir, 'metadata.csv'), index=False)
 
     # Parse column lists
     regular_cols = parse_column_list(args.regular_cols)
@@ -320,10 +446,56 @@ def main():
         else:                                                                                                                                                                           
             raise ValueError("--y_true_col and --y_pred_col required when using --subset")                                                                                              
                                                                                                                                                                                         
-    # Run clustering                                                                                                                                                                    
-    print(f"\nClustering...")                                                                                                                                                           
-    print(f"  Algorithm: {args.algorithm}")                                                                                                                                             
-    print(f"  Distance: {args.distance}") 
+    # Build scoring function for k-selection
+    scoring_fn = None
+    if args.scoring != "silhouette":
+        # Compute subset mask for scorer (same logic as cluster() uses internally)
+        scorer_mask = None
+        if args.subset and y_true is not None and y_pred is not None:
+            if args.subset == "TP":
+                scorer_mask = (y_true == 1) & (y_pred == 1)
+            elif args.subset == "TN":
+                scorer_mask = (y_true == 0) & (y_pred == 0)
+            elif args.subset == "FP":
+                scorer_mask = (y_true == 0) & (y_pred == 1)
+            elif args.subset == "FN":
+                scorer_mask = (y_true == 1) & (y_pred == 0)
+            elif args.subset == "TP_TN":
+                scorer_mask = y_true == y_pred
+            elif args.subset == "FP_FN":
+                scorer_mask = y_true != y_pred
+
+        if args.scoring == "chi2_error":
+            if not args.error_col:
+                raise ValueError("--error_col required for chi2_error scoring")
+            scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
+        elif args.scoring == "chi2_sensitive":
+            if not sensitive_cols:
+                raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
+            scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values, mask=scorer_mask)
+        elif args.scoring == "composite":
+            if not args.error_col or not sensitive_cols:
+                raise ValueError("--error_col and --sensitive_cols required for composite scoring")
+            # Parse composite weights
+            cw = {}
+            for pair in args.composite_weights.split(','):
+                name, w = pair.strip().split(':')
+                cw[name.strip()] = float(w.strip())
+            scoring_fn = make_composite_scorer(
+                df[args.error_col].values,
+                df[sensitive_cols[0]].values,
+                mask=scorer_mask,
+                silhouette_weight=cw.get('silhouette', 0.3),
+                error_weight=cw.get('error', 0.5),
+                fairness_weight=cw.get('fairness', 0.2),
+            )
+
+    # Run clustering
+    print(f"\nClustering...")
+    print(f"  Algorithm: {args.algorithm}")
+    print(f"  Distance: {args.distance}")
+    if args.scoring != "silhouette":
+        print(f"  Scoring: {args.scoring}")
 
     # Validate algorithm + distance combinations
     if args.algorithm == 'kprototypes' and args.distance == 'gower':
@@ -348,6 +520,7 @@ def main():
         max_iter=args.max_iter,
         random_state=args.seed,
         min_datapoints=args.min_datapoints,
+        scoring_fn=scoring_fn,
     )
 
     # Results

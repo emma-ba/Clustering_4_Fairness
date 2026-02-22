@@ -1,7 +1,7 @@
 numpy
 matplotlib
 scikit-learn
-umap-learn
+scikit-learn-extra
 hdbscan
 cornac
 kmodes                                                                                                                                        

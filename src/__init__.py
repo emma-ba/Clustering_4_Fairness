@@ -3,12 +3,20 @@ Fairness clustering package.
 
 Modules:
 - clustering: Main clustering function with support for multiple algorithms and distances
+- scoring: Scoring functions for fairness-aware k-selection
 - visualization: Plotting functions for cluster analysis
 - fairness_metrics: Metrics for evaluating demographic representation in clusters
 - experiments: Experiment utilities for HBAC clustering and result analysis
 """
 
 from .clustering import cluster, ClusteringResult, gower_distance
+from .scoring import (
+    ScoringFn,
+    silhouette_scorer,
+    make_chi2_error_scorer,
+    make_chi2_sensitive_scorer,
+    make_composite_scorer,
+)
 from .visualization import (
     plot_clusters,
     plot_clusters_by_attribute,
@@ -34,6 +42,7 @@ from .experiments import (
     run_experiments,
     run_experiments_multiple_seeds,
     create_default_exp_conditions,
+    create_exp_conditions,
     get_error_rate,
     subset_TP_FN,
     subset_TN_FP,
@@ -44,6 +53,12 @@ __all__ = [
     "cluster",
     "ClusteringResult",
     "gower_distance",
+    # scoring
+    "ScoringFn",
+    "silhouette_scorer",
+    "make_chi2_error_scorer",
+    "make_chi2_sensitive_scorer",
+    "make_composite_scorer",
     # visualization
     "plot_clusters",
     "plot_clusters_by_attribute",
@@ -67,6 +82,7 @@ __all__ = [
     "run_experiments",
     "run_experiments_multiple_seeds",
     "create_default_exp_conditions",
+    "create_exp_conditions",
     "get_error_rate",
     "subset_TP_FN",
     "subset_TN_FP",

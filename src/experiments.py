@@ -51,12 +51,6 @@ SHAP_DUMMY_scaled = ['Shap_sex_Female_scaled','Shap_race_African-American_scaled
 SHAP_DUMMY_scaled_light = ['Shap_sex_Female_scaled','Shap_race_African-American_scaled','Shap_race_Caucasian_scaled']
 
 
-#  C'est mieux de le laisser comme c'est, ne pas les transformer en dummy features. Si on utilise le gower distance, cela ne sera pas dans notre faveur. Apres les gens auront moins de data preparation. On peut demander au gens de nomer les types de data dans chaque. Mettre un peux les noms de coté.
-#
-# : Mais on a besoin que les gens nomment les colomnes par rapport au sens qu'on leur donne. Regular/sensitive/proxy/special (SHAP_*)
-
-# TODO: La fonction sera principalement pour faire de la recherche, alors ca va si on a cette complexité.
-
 
 # =============================================================================
 # Utils for Data Prep
@@ -176,8 +170,8 @@ def hbac_dbscan(data, columns_to_use=[], error='errors',
         continue
 
       # ...is error rate difference large enough?
-      e0 = get_error_rate(candidate_cluster.loc[candidate_cluster['new_clusters'] == 0])
-      e1 = get_error_rate(candidate_cluster.loc[candidate_cluster['new_clusters'] == 1])
+      e0 = get_error_rate(candidate_cluster.loc[candidate_cluster['new_clusters'] == 0], column=error)
+      e1 = get_error_rate(candidate_cluster.loc[candidate_cluster['new_clusters'] == 1], column=error)
 
       if(abs(e0 - e1) < min_acceptable_error_diff):
         #print('Bad split: same error')
@@ -199,10 +193,60 @@ def hbac_dbscan(data, columns_to_use=[], error='errors',
 # Utils for Results - Recap
 # =============================================================================
 
-def make_recap(data_result, feature_set):
+def _expand_multiclass_cols(data, sensitive_cols):
+  """
+  Expand non-binary sensitive columns into per-value binary indicators.
+
+  For columns with more than 2 unique values, creates binary columns
+  named '{col}={value}' for each unique value. Binary columns are kept as-is.
+
+  Returns (data_copy, expanded_cols) where expanded_cols replaces the
+  original multi-class columns with their indicator names.
+  """
+  data = data.copy()
+  expanded_cols = []
+  for col in sensitive_cols:
+    unique_vals = sorted(data[col].dropna().unique())
+    if len(unique_vals) <= 2:
+      # Binary or single-value column — keep as-is
+      expanded_cols.append(col)
+    else:
+      # Multi-class: create per-value binary indicators
+      for val in unique_vals:
+        indicator_name = f'{col}={val}'
+        data[indicator_name] = (data[col] == val).astype(int)
+        expanded_cols.append(indicator_name)
+  return data, expanded_cols
+
+
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'):
+  """
+  Create recap of cluster info with error rates and sensitive feature proportions.
+
+  Parameters
+  ----------
+  data_result : pd.DataFrame
+      Clustered data with 'clusters' column.
+  feature_set : list
+      Feature columns used for clustering (for silhouette computation).
+  sensitive_cols : list, optional
+      Sensitive columns to compute proportions for. Both binary (0/1) and
+      multi-class columns are supported. Multi-class columns are auto-expanded
+      into per-value binary indicators.
+      Defaults to ['race_African-American', 'race_Caucasian', 'sex_Female'] for backwards compat.
+  error_col : str
+      Name of the binary error column. Default 'errors'.
+  """
+  # Default sensitive cols for backwards compatibility
+  if sensitive_cols is None:
+    sensitive_cols = ['race_African-American', 'race_Caucasian', 'sex_Female']
+
+  # Expand multi-class sensitive columns into binary indicators
+  data_result, sensitive_cols_expanded = _expand_multiclass_cols(data_result, sensitive_cols)
+
   # MAKE RECAP of cluster info
   # ...with error rates
-  res = data_result[['clusters', 'errors']]
+  res = data_result[['clusters', error_col]]
 
   # ...with cluster size
   temp = data_result[['clusters']]
@@ -214,25 +258,13 @@ def make_recap(data_result, feature_set):
 
   # ...with 1-vs-All error diff
   recap['error_rate'] = res.groupby(['clusters']).mean()
-  # recap['std'] = (recap['error_rate'] * (1-recap['error_rate']))/recap['count']
-  # recap['std'] = recap['std'].apply(np.sqrt)
 
   # Prepare Quality metrics
   diff_vs_rest = []
-  # diff_std = []
-  diff_p =[]
+  diff_p = []
 
-  race_aa_prop = []
-  race_aa_diff = []
-  race_aa_p = []
-
-  race_c_prop = []
-  race_c_diff = []
-  race_c_p = []
-
-  female_prop = []
-  female_diff = []
-  female_p = []
+  # Dynamic sensitive column tracking (using expanded columns for multi-class support)
+  sensitive_data = {col: {'prop': [], 'diff': [], 'p': []} for col in sensitive_cols_expanded}
 
   silhouette = []
 
@@ -251,21 +283,11 @@ def make_recap(data_result, feature_set):
     # Check if no other cluster
     if(len(rest_data) == 0):
       diff_vs_rest.append(np.nan)
-      # diff_std.append(np.nan)
       diff_p.append(np.nan)
-
-      race_aa_prop.append(np.nan)
-      race_aa_diff.append(np.nan)
-      race_aa_p.append(np.nan)
-
-      race_c_prop.append(np.nan)
-      race_c_diff.append(np.nan)
-      race_c_p.append(np.nan)
-
-      female_prop.append(np.nan)
-      female_diff.append(np.nan)
-      female_p.append(np.nan)
-
+      for col in sensitive_cols_expanded:
+        sensitive_data[col]['prop'].append(np.nan)
+        sensitive_data[col]['diff'].append(np.nan)
+        sensitive_data[col]['p'].append(np.nan)
       silhouette.append(np.nan)
       break
 
@@ -281,13 +303,8 @@ def make_recap(data_result, feature_set):
     rest_rate = rest_n_error / rest_count
     diff_vs_rest.append(recap['error_rate'][c] - rest_rate)
 
-    # ...with std deviation of error differences
-    # std_rest = (rest_rate * (1-rest_rate))/rest_count
-    # std_rest = np.sqrt(std_rest)
-    # diff_std.append(recap['std'][c] + std_rest)
-
-    # ...with Poisson stat testprint('Zero!')
-    # Deal with splits with 0 error (by using either number of errors (FN or FP), or number of correct classifications (TP or TN))
+    # ...with Poisson stat test
+    # Deal with splits with 0 error
     if((recap['n_error'][c] < 1) | (recap['count'][c] < 1) | (rest_n_error < 1) | (rest_count < 1)):
       res = stats.poisson_means_test(recap['count'][c] - recap['n_error'][c], recap['count'][c], rest_count - rest_n_error, rest_count)
       diff_p.append(round(res.pvalue, 3))
@@ -295,84 +312,38 @@ def make_recap(data_result, feature_set):
       res = stats.poisson_means_test(recap['n_error'][c], recap['count'][c], rest_n_error, rest_count)
       diff_p.append(round(res.pvalue, 3))
 
-    ##### Sensitive features (gender, race) -- ['sex_Female', 'race_African-American', 'race_Caucasian']]
-    ### Race African-American (AA)
-    rest_n_aa = rest_data['race_African-American'].sum()
-    rest_prop_aa = rest_n_aa / rest_count
+    ##### Sensitive features — dynamic loop (uses expanded columns)
+    for col in sensitive_cols_expanded:
+      rest_n = rest_data[col].sum()
+      rest_prop = rest_n / rest_count
 
-    c_n_aa = c_data['race_African-American'].sum()
-    c_prop_aa = c_n_aa / c_count
+      c_n = c_data[col].sum()
+      c_prop = c_n / c_count
 
-    race_aa_prop.append(c_prop_aa)
-    race_aa_diff.append(c_prop_aa - rest_prop_aa)
+      sensitive_data[col]['prop'].append(c_prop)
+      sensitive_data[col]['diff'].append(c_prop - rest_prop)
 
-    # Deal with splits with 0 African-American (by using either number of AA, or number of non-AA)
-    if((c_n_aa < 1) | (c_count < 1) | (rest_n_aa < 1) | (rest_count < 1)):
-      res = stats.poisson_means_test(c_count - c_n_aa, c_count, rest_count - rest_n_aa, rest_count)
-      race_aa_p.append(round(res.pvalue, 3))
-    else:
-      res = stats.poisson_means_test(c_n_aa, c_count, rest_n_aa, rest_count)
-      race_aa_p.append(round(res.pvalue, 3))
-
-    ### Race Caucasian
-    rest_n_c = rest_data['race_Caucasian'].sum()
-    rest_prop_c = rest_n_c / rest_count
-
-    c_n_c = c_data['race_Caucasian'].sum()
-    c_prop_c = c_n_c / c_count
-
-    race_c_prop.append(c_prop_c)
-    race_c_diff.append(c_prop_c - rest_prop_c)
-
-    # Deal with splits with 0 African-American (by using either number of AA, or number of non-AA)
-    if((c_n_c < 1) | (c_count < 1) | (rest_n_c < 1) | (rest_count < 1)):
-      res = stats.poisson_means_test(c_count - c_n_c, c_count, rest_count - rest_n_c, rest_count)
-      race_c_p.append(round(res.pvalue, 3))
-    else:
-      res = stats.poisson_means_test(c_n_c, c_count, rest_n_c, rest_count)
-      race_c_p.append(round(res.pvalue, 3))
-
-    ##### Gender
-    rest_n_female = rest_data['sex_Female'].sum()
-    rest_prop_female = rest_n_female/ rest_count
-
-    c_n_female = c_data['sex_Female'].sum()
-    c_prop_female = c_n_female / c_count
-
-    female_prop.append(c_prop_female)
-    female_diff.append(c_prop_female - rest_prop_female)
-
-    # Deal with splits with 0 females(by using either number of females, or number of males)
-    if((c_n_female < 1) | (c_count < 1) | (rest_n_female < 1) | (rest_count < 1)):
-      res = stats.poisson_means_test(c_count - c_n_female, c_count, rest_count - rest_n_female, rest_count)
-      female_p.append(round(res.pvalue, 3))
-    else:
-      res = stats.poisson_means_test(c_n_female, c_count, rest_n_female, rest_count)
-      female_p.append(round(res.pvalue, 3))
+      # Poisson means test (handle zero counts)
+      if((c_n < 1) | (c_count < 1) | (rest_n < 1) | (rest_count < 1)):
+        res = stats.poisson_means_test(c_count - c_n, c_count, rest_count - rest_n, rest_count)
+        sensitive_data[col]['p'].append(round(res.pvalue, 3))
+      else:
+        res = stats.poisson_means_test(c_n, c_count, rest_n, rest_count)
+        sensitive_data[col]['p'].append(round(res.pvalue, 3))
 
   recap['diff_vs_rest'] = np.around(diff_vs_rest, 3)
-  # recap['diff_std'] = np.around(diff_std, 3)
   recap['diff_p'] = diff_p
 
-  recap['race_aa_prop'] = np.around(race_aa_prop, 3)
-  recap['race_aa_diff'] = np.around(race_aa_diff, 3)
-  recap['race_aa_p'] = race_aa_p
-
-  recap['race_c_prop'] = np.around(race_c_prop, 3)
-  recap['race_c_diff'] = np.around(race_c_diff, 3)
-  recap['race_c_p'] = race_c_p
-
-  recap['female_prop'] = np.around(female_prop, 3)
-  recap['female_diff'] = np.around(female_diff, 3)
-  recap['female_p'] = female_p
+  for col in sensitive_cols_expanded:
+    recap[f'{col}_prop'] = np.around(sensitive_data[col]['prop'], 3)
+    recap[f'{col}_diff'] = np.around(sensitive_data[col]['diff'], 3)
+    recap[f'{col}_p'] = sensitive_data[col]['p']
 
   recap['silhouette'] = silhouette
 
   recap['error_rate'] = np.around(recap['error_rate'] , 3)
-  # recap['std'] = np.around(recap['std'] , 3)
 
   recap.rename(columns={'clusters':'c'}, inplace=True)
-  #print(recap.sort_values(by=['diff_p']))
 
   return(recap)
 
@@ -453,87 +424,85 @@ def separability_check(data, labels, columns):
 # Utils for Results - Chi-Square Tests
 # =============================================================================
 
-def make_chi_tests(results):
+def _get_sensitive_cols_from_recap(recap, sensitive_cols):
+  """
+  Determine the actual sensitive column names present in the recap.
+
+  If make_recap expanded multi-class columns (e.g., 'race' -> 'race=0', 'race=1'),
+  find those expanded names. Otherwise return the original column names.
+  """
+  actual_cols = []
+  for col in sensitive_cols:
+    if f'{col}_prop' in recap.columns:
+      actual_cols.append(col)
+    else:
+      # Look for expanded multi-class indicators (col=value pattern)
+      expanded = [c.replace('_prop', '') for c in recap.columns
+                  if c.startswith(f'{col}=') and c.endswith('_prop')]
+      actual_cols.extend(expanded)
+  return actual_cols
+
+
+def make_chi_tests(results, sensitive_cols=None):
+  """
+  Run chi-squared tests on cluster recaps for error and sensitive columns.
+
+  Supports both binary and multi-class sensitive columns. For multi-class
+  columns that were expanded by make_recap(), builds a full multi-row
+  contingency table across all values.
+
+  Parameters
+  ----------
+  results : dict
+      Results from run_experiments().
+  sensitive_cols : list, optional
+      Original sensitive column names. Defaults to ['race_African-American', 'race_Caucasian', 'sex_Female'].
+  """
+  if sensitive_cols is None:
+    sensitive_cols = ['race_African-American', 'race_Caucasian', 'sex_Female']
+
+  # Determine actual columns from first recap
+  if len(results['cond_recap']) > 0:
+    actual_sensitive = _get_sensitive_cols_from_recap(results['cond_recap'][0], sensitive_cols)
+  else:
+    actual_sensitive = sensitive_cols
+
   chi_res = {'cond_descr': [],
             'cond_name': [],
-            'error': [],
-            'race_aa': [],
-            'race_c': [],
-            'gender': []}
+            'error': []}
+  for col in actual_sensitive:
+    chi_res[col] = []
 
   for i in range(0, len(results['cond_name'])):
     chi_res['cond_descr'].append(results['cond_descr'][i])
     chi_res['cond_name'].append(results['cond_name'][i])
-    data = results['cond_res'][i]
     recap = results['cond_recap'][i]
 
     if(len(recap['diff_p']) == 1):
       chi_res['error'].append(np.nan)
-      chi_res['race_aa'].append(np.nan)
-      chi_res['race_c'].append(np.nan)
-      chi_res['gender'].append(np.nan)
+      for col in actual_sensitive:
+        chi_res[col].append(np.nan)
       continue
 
     # Test error differences
     test_data = recap[['count', 'n_error']].copy(deep=True)
-
     test_data['count'] = test_data['count'] - test_data['n_error']
     test_data = test_data.rename(columns={"count": "n_correct"})
-
     test_data = test_data.transpose()
     test_res = chi2_contingency(test_data)
     chi_res['error'].append(round(test_res.pvalue, 6))
 
-    #print(test_data)
-    # print(round(test_res.pvalue, 6))
-
-    # Test gender differences
-    test_data = recap[['count', 'female_prop']].copy(deep=True)
-
-    test_data['female_prop'] = round(test_data['count'] * test_data['female_prop'])
-    test_data = test_data.rename(columns={"female_prop": "female_n"}).astype(int)
-
-    test_data['count'] = test_data['count'] - test_data['female_n']
-    test_data = test_data.rename(columns={"count": "male_n"})
-
-    test_data = test_data.transpose()
-    test_res = chi2_contingency(test_data)
-    chi_res['gender'].append(round(test_res.pvalue, 6))
-
-    # print(test_data)
-    # print(round(test_res.pvalue, 6))
-
-    # Test Race AA differences
-    test_data = recap[['count', 'race_aa_prop']].copy(deep=True)
-
-    test_data['race_aa_prop'] = round(test_data['count'] * test_data['race_aa_prop'])
-    test_data = test_data.rename(columns={"race_aa_prop": "race_aa_n"}).astype(int)
-
-    test_data['count'] = test_data['count'] - test_data['race_aa_n']
-    test_data = test_data.rename(columns={"count": "race_not_aa_n"})
-
-    test_data = test_data.transpose()
-    test_res = chi2_contingency(test_data)
-    chi_res['race_aa'].append(round(test_res.pvalue, 6))
-
-    # print(test_data)
-    # print(round(test_res.pvalue, 6))
-
-    # Test Race Caucasian differences
-    test_data = recap[['count', 'race_c_prop']].copy(deep=True)
-
-    test_data['race_c_prop'] = round(test_data['count'] * test_data['race_c_prop'])
-    test_data = test_data.rename(columns={"race_c_prop": "race_c_n"}).astype(int)
-
-    test_data['count'] = test_data['count'] - test_data['race_c_n']
-    test_data = test_data.rename(columns={"count": "race_not_c_n"})
-
-    test_data = test_data.transpose()
-    test_res = chi2_contingency(test_data)
-    chi_res['race_c'].append(test_res.pvalue)
-
-    # print(test_data)
-    # print(round(test_res.pvalue, 6))
+    # Test each sensitive column (binary: 2x2 table, multi-class indicators: 2xN each)
+    for col in actual_sensitive:
+      prop_col = f'{col}_prop'
+      test_data = recap[['count', prop_col]].copy(deep=True)
+      test_data[prop_col] = round(test_data['count'] * test_data[prop_col])
+      test_data = test_data.rename(columns={prop_col: f'{col}_n'}).astype(int)
+      test_data['count'] = test_data['count'] - test_data[f'{col}_n']
+      test_data = test_data.rename(columns={"count": f'not_{col}_n'})
+      test_data = test_data.transpose()
+      test_res = chi2_contingency(test_data)
+      chi_res[col].append(round(test_res.pvalue, 6))
 
   return(pd.DataFrame(chi_res))
 
@@ -542,14 +511,36 @@ def make_chi_tests(results):
 # Utils for Results - All Quality Metrics
 # =============================================================================
 
-def recap_quali_metrics(chi_res, results, exp_condition):
+def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None):
+  """
+  Combine chi-squared results with silhouette scores.
+
+  Parameters
+  ----------
+  chi_res : pd.DataFrame
+      Chi-squared test results.
+  results : dict
+      Results from run_experiments().
+  exp_condition : pd.DataFrame
+      Experimental conditions.
+  sensitive_cols : list, optional
+      Original sensitive column names. Actual columns used are inferred from
+      chi_res (which may contain expanded multi-class indicator names).
+  """
+  if sensitive_cols is None:
+    sensitive_cols = ['race_African-American', 'race_Caucasian', 'sex_Female']
+
+  # Use whatever sensitive columns are actually in chi_res
+  # (may be expanded multi-class names like 'race=0', 'race=1')
+  skip_cols = {'cond_descr', 'cond_name', 'error'}
+  actual_sensitive = [c for c in chi_res.columns if c not in skip_cols]
+
   all_quali = {'cond_descr': chi_res['cond_descr'],
             'cond_name': chi_res['cond_name'],
-            'error': chi_res['error'],
-            'race_aa': chi_res['race_aa'],
-            'race_c': chi_res['race_c'],
-            'gender': chi_res['gender'],
-            'silhouette': []}
+            'error': chi_res['error']}
+  for col in actual_sensitive:
+    all_quali[col] = chi_res[col]
+  all_quali['silhouette'] = []
 
   for i in range(0, len(chi_res['cond_name'])):
     data = results['cond_res'][i]
@@ -646,7 +637,9 @@ def run_experiments(data, exp_condition,
                     min_acceptable_error_diff=0.005,
                     max_iter=100,
                     eps=1,
-                    seed=42):
+                    seed=42,
+                    sensitive_cols=None,
+                    error_col='errors'):
   """
   Run all experimental conditions on the data.
 
@@ -668,13 +661,15 @@ def run_experiments(data, exp_condition,
       DBSCAN eps parameter.
   seed : int
       Random seed for reproducibility.
+  sensitive_cols : list, optional
+      Sensitive columns for recap. Defaults to COMPAS columns.
+  error_col : str
+      Name of the binary error column. Default 'errors'.
 
   Returns
   -------
   dict
       Results dictionary with keys: cond_name, cond_descr, cond_res, cond_recap
-
-  # TODO 15: Add seed naming and multiple seed repetitions
   """
   np.random.seed(seed)
 
@@ -686,14 +681,15 @@ def run_experiments(data, exp_condition,
   for i in range(0, len(exp_condition)):
     res = hbac_dbscan(data.copy(deep=True),
                     columns_to_use = exp_condition['feature_set'][i],
-                    error='errors',
+                    error=error_col,
                     min_splittable_cluster_prop = min_splittable_cluster_prop,
                     min_acceptable_cluster_prop = min_acceptable_cluster_prop,
                     min_acceptable_error_diff = min_acceptable_error_diff,
                     max_iter=max_iter,
                     eps=eps)
 
-    recap = make_recap(res, exp_condition['feature_set'][i])
+    recap = make_recap(res, exp_condition['feature_set'][i],
+                       sensitive_cols=sensitive_cols, error_col=error_col)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])
@@ -707,8 +703,6 @@ def run_experiments_multiple_seeds(data, exp_condition, seeds=[42, 123, 456],
                                    **kwargs):
   """
   Run experiments with multiple seeds for reproducibility analysis.
-
-  # TODO 15: Add seed naming and multiple seed repetitions
 
   Parameters
   ----------
@@ -736,6 +730,71 @@ def run_experiments_multiple_seeds(data, exp_condition, seeds=[42, 123, 456],
 # =============================================================================
 # Experimental Conditions Setup
 # =============================================================================
+
+def create_exp_conditions(groups):
+  """
+  Generate all experimental conditions from named feature groups.
+
+  Generates all non-empty subsets of groups, excluding subsets where the
+  only group present is 'ERR'. Each condition is named like
+  '+REG +SEN -ERR -SPECIAL' (uppercase = included, lowercase = excluded).
+
+  Parameters
+  ----------
+  groups : dict
+      Mapping of group_name -> list of column names.
+      Example: {'REG': ['age_scaled', ...], 'SEN': ['sex_Female', ...],
+                'ERR': ['errors'], 'SPECIAL': ['Shap_age_scaled', ...]}
+
+  Returns
+  -------
+  pd.DataFrame with columns: feature_set_descr, feature_set_name, feature_set
+  """
+  from itertools import combinations
+
+  group_names = list(groups.keys())
+  n = len(group_names)
+
+  feature_set_name = []
+  feature_set_descr = []
+  feature_set = []
+
+  # Generate all non-empty subsets
+  for r in range(1, n + 1):
+    for subset in combinations(range(n), r):
+      included = set(subset)
+      included_names = [group_names[i] for i in included]
+
+      # Skip if the only group is 'ERR'
+      if included_names == ['ERR']:
+        continue
+
+      # Build name: +REG +SEN -ERR (uppercase=included, lowercase=excluded)
+      name_parts = []
+      for i, gname in enumerate(group_names):
+        if i in included:
+          name_parts.append(f'+{gname.upper()}')
+        else:
+          name_parts.append(f'-{gname.lower()}')
+      name = ' '.join(name_parts)
+
+      # Build description
+      descr = ' + '.join(included_names)
+
+      # Build feature set: concatenation of included groups' columns
+      cols = []
+      for i in included:
+        cols.extend(groups[group_names[i]])
+
+      feature_set_name.append(name)
+      feature_set_descr.append(descr)
+      feature_set.append(cols)
+
+  exp_condition = pd.DataFrame({'feature_set_descr': feature_set_descr,
+                                'feature_set_name': feature_set_name,
+                                'feature_set': feature_set})
+  return exp_condition
+
 
 def create_default_exp_conditions():
   """
