@@ -1,2 +1,0 @@
-seed,algorithm,distance,dataset,timestamp,scoring_method
-42,kmeans,euclidean,Compas_error_shap,2026-02-24_13-31-41,chi2_error
