@@ -3,14 +3,14 @@ import numpy as np
 import pandas as pd
 from src.clustering import cluster
 from src.scoring import (
-    silhouette_scorer, make_chi2_error_scorer,
+    make_chi2_error_scorer,
     make_chi2_sensitive_scorer, make_composite_scorer,
 )
 from src.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
 from src.fairness_metrics import evaluate_fairness, print_fairness_report
 from src.experiments import (
-    create_default_exp_conditions, create_exp_conditions,
-    run_experiments, make_chi_tests,
+    create_exp_conditions,
+    run_experiments, run_experiments_generic, make_chi_tests,
     recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap
 )
 from datetime import datetime
@@ -79,12 +79,12 @@ def parse_args():
                         choices=["euclidean", "manhattan", "gower"],
                         help="Distance metric")
     
-    parser.add_argument("--n_clusters", type=int, default=5,
-                        help="Exact number of clusters (mutually exclusive with n_min/n_max)")
-    parser.add_argument("--n_min", type=int, default=2,
-                        help="Minimum number of clusters (for range-based search)")
-    parser.add_argument("--n_max", type=int, default=10,
-                        help="Maximum number of clusters (for range-based search")
+    parser.add_argument("--n_clusters", type=int, default=None,
+                        help="Exact number of clusters (mutually exclusive with n_min/n_max). Defaults to 5 if neither n_min/n_max is given.")
+    parser.add_argument("--n_min", type=int, default=None,
+                        help="Minimum number of clusters (for range-based k search)")
+    parser.add_argument("--n_max", type=int, default=None,
+                        help="Maximum number of clusters (for range-based k search)")
 
 #DBSCAN parameters                                                                                                                                                          
     parser.add_argument("--eps", type=float, default=0.5,                                                                                                                               
@@ -125,7 +125,7 @@ def parse_args():
 
     # Statistical tests
     parser.add_argument("--separability_check", action="store_true",
-                        help="Run chi-squared/Kruskal-Wallis tests on clusters")
+                        help="Run chi-squared tests on clusters")
 
     parser.add_argument("--y_true_col", type=str, default=None,                                                                                                                         
                           help="Column name for ground truth labels (for subset filtering)")                                                                                              
@@ -136,10 +136,17 @@ def parse_args():
                         choices=["TP", "TN", "FP", "FN", "TP_TN", "FP_FN"],
                         help="Analyze only this confusion matrix subset (TP_TN=correct predictions, FP_FN=errors)")
 
+    # TODO: Detailed plots for each clusters. 
+    # TODO: assign output dir from project dir, not from root.
+    # TODO: Fix CSV to show all results. Disabeld for testing purposes (low prio)
+    # TODO: Start with regression afterwards. Maybe easier Regression > Ranking > Multi-class. 
+        #   Bulk of errors - from one class to another class. 
+    # TODO: 
+    # TODO: Make it optional to have the projection. 
     # Projection method
     parser.add_argument("--projection", type=str, default="tsne",
                         choices=["pca", "tsne"],
-                        help="Projection method for visualization (UMAP disabled)")
+                        help="Projection method for visualization ")
 
     parser.add_argument("--regular_cols", type=str, default=None,                                                                                                                       
                           help="Regular features for clustering (comma-separated column names)")                                                                                          
@@ -228,19 +235,74 @@ def run_batch_experiment(df, args, output_dir):
     exp_condition_save.to_csv(f"{output_dir}/exp_condition.csv", index=False)
     print(f"\nSaved: exp_condition.csv")
 
-    # Run all experiments
-    results = run_experiments(
-        df,
-        exp_condition,
-        min_splittable_cluster_prop=0.05,
-        min_acceptable_cluster_prop=0.05,
-        min_acceptable_error_diff=0.005,
-        max_iter=100,
-        eps=1,
-        seed=args.seed,
-        sensitive_cols=sensitive_cols,
-        error_col=error_col
+    # Build scoring function for k-selection (same logic as single-run mode)
+    scoring_fn = None
+    if args.scoring != "silhouette":
+        if args.scoring == "chi2_error":
+            if not error_col:
+                raise ValueError("--error_col required for chi2_error scoring")
+            scoring_fn = make_chi2_error_scorer(df[error_col].values)
+        elif args.scoring == "chi2_sensitive":
+            if not sensitive_cols:
+                raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
+            scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values)
+        elif args.scoring == "composite":
+            if not error_col or not sensitive_cols:
+                raise ValueError("--error_col and --sensitive_cols required for composite scoring")
+            cw = {}
+            for pair in args.composite_weights.split(','):
+                name, w = pair.strip().split(':')
+                cw[name.strip()] = float(w.strip())
+            scoring_fn = make_composite_scorer(
+                df[error_col].values,
+                df[sensitive_cols[0]].values,
+                silhouette_weight=cw.get('silhouette', 0.3),
+                error_weight=cw.get('error', 0.5),
+                fairness_weight=cw.get('fairness', 0.2),
+            )
+
+    # Parse feature weights
+    all_clustering_cols = regular_cols + special_cols
+    feature_weights = parse_feature_weights(
+        args.feature_weights, regular_cols, sensitive_cols, special_cols, all_clustering_cols
     )
+
+    # Run all experiments — route by algorithm
+    if args.algorithm in ("hdbscan", "dbscan"):
+        # Existing HBAC-DBSCAN path (backwards compat)
+        results = run_experiments(
+            df,
+            exp_condition,
+            min_splittable_cluster_prop=0.05,
+            min_acceptable_cluster_prop=0.05,
+            min_acceptable_error_diff=0.005,
+            max_iter=100,
+            eps=args.eps,
+            seed=args.seed,
+            sensitive_cols=sensitive_cols,
+            error_col=error_col
+        )
+    else:
+        # Generic path: kmeans, bisectingkmeans, kmedoids, kprototypes
+        results = run_experiments_generic(
+            df,
+            exp_condition,
+            algorithm=args.algorithm,
+            distance=args.distance,
+            n_clusters=args.n_clusters,
+            n_min=args.n_min,
+            n_max=args.n_max,
+            max_iter=args.max_iter,
+            seed=args.seed,
+            scoring_fn=scoring_fn,
+            sensitive_cols=sensitive_cols,
+            error_col=error_col,
+            min_cluster_size=args.min_cluster_size,
+            min_samples=args.min_samples,
+            eps=args.eps,
+            min_datapoints=args.min_datapoints,
+            feature_weights=feature_weights,
+        )
 
     # Print progress for each condition
     print()
@@ -316,6 +378,21 @@ def run_batch_experiment(df, args, output_dir):
 
 def main():
     args = parse_args()
+
+    # Resolve n_clusters / n_min / n_max defaults:
+    # If n_min or n_max given - range search (fill in the other if missing)
+    # If neither -  default to n_clusters=5
+    if args.n_min is not None or args.n_max is not None:
+        if args.n_clusters is not None:
+            print("Warning: --n_clusters ignored when --n_min/--n_max are provided")
+            args.n_clusters = None
+        if args.n_min is None:
+            args.n_min = 2
+        if args.n_max is None:
+            args.n_max = 10
+    elif args.n_clusters is None:
+        args.n_clusters = 5
+
     session_date = datetime.now().strftime('%Y-%m-%d')
     dataset_name = os.path.splitext(os.path.basename(args.data_path))[0]
 
@@ -344,11 +421,11 @@ def main():
                 # Save per-seed metadata
                 metadata = pd.DataFrame([{
                     'seed': seed,
-                    'algorithm': 'hbac_dbscan',
-                    'distance': 'euclidean',
+                    'algorithm': args.algorithm,
+                    'distance': args.distance,
                     'dataset': dataset_name,
                     'timestamp': full_timestamp,
-                    'scoring_method': 'N/A',
+                    'scoring_method': args.scoring,
                 }])
                 metadata.to_csv(os.path.join(seed_dir, 'metadata.csv'), index=False)
                 args.seed = seed
@@ -388,11 +465,11 @@ def main():
         # Save metadata
         metadata = pd.DataFrame([{
             'seed': args.seed,
-            'algorithm': 'hbac_dbscan',
-            'distance': 'euclidean',
+            'algorithm': args.algorithm,
+            'distance': args.distance,
             'dataset': dataset_name,
             'timestamp': full_timestamp,
-            'scoring_method': 'N/A',
+            'scoring_method': args.scoring,
         }])
         metadata.to_csv(os.path.join(output_dir, 'metadata.csv'), index=False)
         run_batch_experiment(df, args, output_dir)

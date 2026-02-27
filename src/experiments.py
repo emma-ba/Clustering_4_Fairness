@@ -6,7 +6,6 @@ This module provides functions for:
 - Creating result recap tables for each experimental condition
 - Chi-square tests for cluster quality
 - Quality metrics summary
-
 """
 
 import numpy as np
@@ -15,7 +14,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import re
 from sklearn.cluster import DBSCAN
-from sklearn.metrics import silhouette_samples, silhouette_score
+from sklearn.metrics import silhouette_samples
 from scipy import stats
 from scipy.stats import chi2_contingency
 from datetime import datetime
@@ -33,7 +32,7 @@ BASIC_COL = ['age', 'decile_score', 'priors_count']
 DUMMY_COL = ['sex_Female','race_African-American', 'race_Caucasian', 'race_Asian', 'race_Hispanic',
                       'race_Native American', 'race_Other']
 
-ERROR_COL_scaled = ['errors']  # Using unscaled errors column (binary 0/1)
+ERROR_COL_scaled = ['errors']  
 BASIC_COL_scaled = ['age_scaled', 'decile_score_scaled', 'priors_count_scaled']
 DUMMY_COL_scaled = ['sex_Female_scaled', 'race_Native American_scaled','race_Other_scaled',
                 'race_African-American_scaled', 'race_Asian_scaled', 'race_Caucasian_scaled', 'race_Hispanic_scaled']
@@ -249,7 +248,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   res = data_result[['clusters', error_col]]
 
   # ...with cluster size
-  temp = data_result[['clusters']]
+  temp = data_result[['clusters']].copy()
   temp['count'] = 1
   recap = temp.groupby(['clusters'], as_index=False).sum()
 
@@ -694,6 +693,110 @@ def run_experiments(data, exp_condition,
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])
     results['cond_res'].append(res)
+    results['cond_recap'].append(recap)
+
+  return results
+
+
+def run_experiments_generic(data, exp_condition, algorithm, distance,
+                            n_clusters=None, n_min=None, n_max=None,
+                            max_iter=300, seed=42,
+                            scoring_fn=None, sensitive_cols=None, error_col='errors',
+                            min_cluster_size=15, min_samples=5, eps=0.5,
+                            min_datapoints=None, feature_weights=None):
+  """
+  Run all experimental conditions using the generic cluster() function.
+
+  Works with any algorithm supported by cluster() (kmeans, bisectingkmeans,
+  kmedoids, kprototypes, dbscan, hdbscan). Returns the same dict format as
+  run_experiments() so downstream code (make_chi_tests, recap_quali_metrics,
+  heatmaps) works unchanged.
+
+  Parameters
+  ----------
+  data : pd.DataFrame
+      Input data with features and error columns.
+  exp_condition : pd.DataFrame
+      DataFrame with columns: feature_set_descr, feature_set_name, feature_set
+  algorithm : str
+      Clustering algorithm name.
+  distance : str
+      Distance metric.
+  n_clusters : int, optional
+      Fixed number of clusters.
+  n_min, n_max : int, optional
+      Range for k-search.
+  max_iter : int
+      Maximum iterations (KMeans/BisectingKMeans).
+  seed : int
+      Random seed.
+  scoring_fn : callable, optional
+      Scoring function for k-selection.
+  sensitive_cols : list, optional
+      Sensitive columns for recap.
+  error_col : str
+      Name of the binary error column.
+  min_cluster_size : int
+      HDBSCAN min_cluster_size.
+  min_samples : int
+      HDBSCAN min_samples.
+  eps : float
+      DBSCAN eps.
+  min_datapoints : int, optional
+      Minimum datapoints per cluster.
+  feature_weights : dict, optional
+      Feature weights for clustering.
+
+  Returns
+  -------
+  dict
+      Results dictionary with keys: cond_name, cond_descr, cond_res, cond_recap
+  """
+  from .clustering import cluster
+
+  np.random.seed(seed)
+
+  results = {'cond_name': [],
+            'cond_descr': [],
+            'cond_res': [],
+            'cond_recap': []}
+
+  for i in range(len(exp_condition)):
+    feature_set = exp_condition['feature_set'][i]
+
+    result = cluster(
+        features=data[feature_set],
+        algorithm=algorithm,
+        distance=distance,
+        n_clusters=n_clusters,
+        n_min=n_min,
+        n_max=n_max,
+        max_iter=max_iter,
+        random_state=seed,
+        scoring_fn=scoring_fn,
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        eps=eps,
+        min_datapoints=min_datapoints,
+        feature_weights=feature_weights,
+    )
+
+    # Build result DataFrame matching hbac_dbscan output format:
+    # original data + 'clusters' column
+    res_df = data.copy()
+    if result.mask is not None:
+      # Subset was applied: assign -1 to excluded rows, labels to included
+      res_df['clusters'] = -1
+      res_df.loc[result.mask, 'clusters'] = result.labels
+    else:
+      res_df['clusters'] = result.labels
+
+    recap = make_recap(res_df, feature_set,
+                       sensitive_cols=sensitive_cols, error_col=error_col)
+
+    results['cond_name'].append(exp_condition['feature_set_name'][i])
+    results['cond_descr'].append(exp_condition['feature_set_descr'][i])
+    results['cond_res'].append(res_df)
     results['cond_recap'].append(recap)
 
   return results

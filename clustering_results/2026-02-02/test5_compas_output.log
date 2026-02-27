@@ -1,0 +1,139 @@
+Loading data...
+
+Clustering...
+  Algorithm: dbscan
+  Distance: gower
+
+Results:
+  Clusters: 10
+  Noise: 7
+  Cluster sizes: {np.int64(0): np.int64(310), np.int64(1): np.int64(3044), np.int64(2): np.int64(1887), np.int64(3): np.int64(567), np.int64(4): np.int64(534), np.int64(5): np.int64(652), np.int64(6): np.int64(67), np.int64(7): np.int64(103), np.int64(8): np.int64(30), np.int64(9): np.int64(13), np.int64(-1): np.int64(7)}
+
+Fairness evaluation:
+=== Fairness Report: race ===
+Overall Balance Score: 0.733
+Overall Entropy: 1.611
+
+Demographic Parity per Cluster:
+  Cluster 0: African-American: 0.00%, Asian: 0.00%, Caucasian: 0.00%, Hispanic: 0.00%, Native American: 0.00%, Other: 100.00% (entropy: -0.000)
+  Cluster 1: African-American: 100.00%, Asian: 0.00%, Caucasian: 0.00%, Hispanic: 0.00%, Native American: 0.00%, Other: 0.00% (entropy: -0.000)
+  Cluster 2: African-American: 0.00%, Asian: 0.00%, Caucasian: 100.00%, Hispanic: 0.00%, Native American: 0.00%, Other: 0.00% (entropy: -0.000)
+  Cluster 3: African-American: 0.00%, Asian: 0.00%, Caucasian: 100.00%, Hispanic: 0.00%, Native American: 0.00%, Other: 0.00% (entropy: -0.000)
+  Cluster 4: African-American: 0.00%, Asian: 0.00%, Caucasian: 0.00%, Hispanic: 100.00%, Native American: 0.00%, Other: 0.00% (entropy: -0.000)
+  Cluster 5: African-American: 100.00%, Asian: 0.00%, Caucasian: 0.00%, Hispanic: 0.00%, Native American: 0.00%, Other: 0.00% (entropy: -0.000)
+  Cluster 6: African-American: 0.00%, Asian: 0.00%, Caucasian: 0.00%, Hispanic: 0.00%, Native American: 0.00%, Other: 100.00% (entropy: -0.000)
+  Cluster 7: African-American: 0.00%, Asian: 0.00%, Caucasian: 0.00%, Hispanic: 100.00%, Native American: 0.00%, Other: 0.00% (entropy: -0.000)
+  Cluster 8: African-American: 0.00%, Asian: 100.00%, Caucasian: 0.00%, Hispanic: 0.00%, Native American: 0.00%, Other: 0.00% (entropy: -0.000)
+  Cluster 9: African-American: 0.00%, Asian: 0.00%, Caucasian: 0.00%, Hispanic: 0.00%, Native American: 100.00%, Other: 0.00% (entropy: -0.000)
+
+Representation Ratios (vs overall population):
+  African-American:
+    Cluster 0: 0.00x (under)
+    Cluster 1: 1.95x (over)
+    Cluster 2: 0.00x (under)
+    Cluster 3: 0.00x (under)
+    Cluster 4: 0.00x (under)
+    Cluster 5: 1.95x (over)
+    Cluster 6: 0.00x (under)
+    Cluster 7: 0.00x (under)
+    Cluster 8: 0.00x (under)
+    Cluster 9: 0.00x (under)
+  Asian:
+    Cluster 0: 0.00x (under)
+    Cluster 1: 0.00x (under)
+    Cluster 2: 0.00x (under)
+    Cluster 3: 0.00x (under)
+    Cluster 4: 0.00x (under)
+    Cluster 5: 0.00x (under)
+    Cluster 6: 0.00x (under)
+    Cluster 7: 0.00x (under)
+    Cluster 8: 225.44x (over)
+    Cluster 9: 0.00x (under)
+  Caucasian:
+    Cluster 0: 0.00x (under)
+    Cluster 1: 0.00x (under)
+    Cluster 2: 2.94x (over)
+    Cluster 3: 2.94x (over)
+    Cluster 4: 0.00x (under)
+    Cluster 5: 0.00x (under)
+    Cluster 6: 0.00x (under)
+    Cluster 7: 0.00x (under)
+    Cluster 8: 0.00x (under)
+    Cluster 9: 0.00x (under)
+  Hispanic:
+    Cluster 0: 0.00x (under)
+    Cluster 1: 0.00x (under)
+    Cluster 2: 0.00x (under)
+    Cluster 3: 0.00x (under)
+    Cluster 4: 11.32x (over)
+    Cluster 5: 0.00x (under)
+    Cluster 6: 0.00x (under)
+    Cluster 7: 11.32x (over)
+    Cluster 8: 0.00x (under)
+    Cluster 9: 0.00x (under)
+  Native American:
+    Cluster 0: 0.00x (under)
+    Cluster 1: 0.00x (under)
+    Cluster 2: 0.00x (under)
+    Cluster 3: 0.00x (under)
+    Cluster 4: 0.00x (under)
+    Cluster 5: 0.00x (under)
+    Cluster 6: 0.00x (under)
+    Cluster 7: 0.00x (under)
+    Cluster 8: 0.00x (under)
+    Cluster 9: 400.78x (over)
+  Other:
+    Cluster 0: 19.14x (over)
+    Cluster 1: 0.00x (under)
+    Cluster 2: 0.00x (under)
+    Cluster 3: 0.00x (under)
+    Cluster 4: 0.00x (under)
+    Cluster 5: 0.00x (under)
+    Cluster 6: 19.14x (over)
+    Cluster 7: 0.00x (under)
+    Cluster 8: 0.00x (under)
+    Cluster 9: 0.00x (under)
+=== Fairness Report: sex ===
+Overall Balance Score: 0.561
+Overall Entropy: 0.708
+
+Demographic Parity per Cluster:
+  Cluster 0: Female: 0.00%, Male: 100.00% (entropy: -0.000)
+  Cluster 1: Female: 0.00%, Male: 100.00% (entropy: -0.000)
+  Cluster 2: Female: 0.00%, Male: 100.00% (entropy: -0.000)
+  Cluster 3: Female: 100.00%, Male: 0.00% (entropy: -0.000)
+  Cluster 4: Female: 0.00%, Male: 100.00% (entropy: -0.000)
+  Cluster 5: Female: 100.00%, Male: 0.00% (entropy: -0.000)
+  Cluster 6: Female: 100.00%, Male: 0.00% (entropy: -0.000)
+  Cluster 7: Female: 100.00%, Male: 0.00% (entropy: -0.000)
+  Cluster 8: Female: 0.00%, Male: 100.00% (entropy: -0.000)
+  Cluster 9: Female: 0.00%, Male: 100.00% (entropy: -0.000)
+
+Representation Ratios (vs overall population):
+  Female:
+    Cluster 0: 0.00x (under)
+    Cluster 1: 0.00x (under)
+    Cluster 2: 0.00x (under)
+    Cluster 3: 5.17x (over)
+    Cluster 4: 0.00x (under)
+    Cluster 5: 5.17x (over)
+    Cluster 6: 5.17x (over)
+    Cluster 7: 5.17x (over)
+    Cluster 8: 0.00x (under)
+    Cluster 9: 0.00x (under)
+  Male:
+    Cluster 0: 1.24x (over)
+    Cluster 1: 1.24x (over)
+    Cluster 2: 1.24x (over)
+    Cluster 3: 0.00x (under)
+    Cluster 4: 1.24x (over)
+    Cluster 5: 0.00x (under)
+    Cluster 6: 0.00x (under)
+    Cluster 7: 0.00x (under)
+    Cluster 8: 1.24x (over)
+    Cluster 9: 1.24x (over)
+
+Generating visualizations (tsne)...
+  Saved to visualization/clustering_results/2026-02-02/
+
+Done.

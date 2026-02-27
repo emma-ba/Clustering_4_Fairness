@@ -11,7 +11,7 @@ This module provides a flexible clustering function that supports:
 
 import numpy as np
 import pandas as pd
-from typing import Optional, Literal, Union, Callable
+from typing import Optional, Literal, Union
 from dataclasses import dataclass
 from sklearn.cluster import DBSCAN, HDBSCAN, KMeans, BisectingKMeans
 from sklearn.preprocessing import StandardScaler
@@ -320,7 +320,8 @@ def cluster(
     elif algorithm in ("kmeans", "bisectingkmeans", "kmedoids", "kprototypes"):
         # Default scoring function if none provided
         _scoring = scoring_fn if scoring_fn is not None else silhouette_scorer
-
+        # TODO: There are some parameters in kprototypes, gamma, and it's not fixed, it's prediced from the data, that parameter will be changed. We need to assign gamma = 1 if we want to use feat. weights 
+        # TODO: Deal with numerical features too as sensitive - e.g. age
         # Validate kprototypes requirements
         if algorithm == "kprototypes":
             # NOTE: KPrototypes uses its own internal distance metric (Huang's cost function):

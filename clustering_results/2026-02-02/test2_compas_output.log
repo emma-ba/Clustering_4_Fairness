@@ -1,0 +1,91 @@
+Loading data...
+
+Clustering...
+  Algorithm: kmeans
+  Distance: euclidean
+
+Results:
+  Clusters: 5
+  Noise: 0
+  Silhouette: 0.350
+  Calinski-Harabasz: 4798.5
+  Cluster sizes: {np.int32(0): np.int64(2499), np.int32(1): np.int64(991), np.int32(2): np.int64(1579), np.int32(3): np.int64(1778), np.int32(4): np.int64(367)}
+
+Fairness evaluation:
+=== Fairness Report: sex ===
+Overall Balance Score: 0.953
+Overall Entropy: 0.708
+
+Demographic Parity per Cluster:
+  Cluster 0: Female: 21.01%, Male: 78.99% (entropy: 0.742)
+  Cluster 1: Female: 12.92%, Male: 87.08% (entropy: 0.555)
+  Cluster 2: Female: 21.15%, Male: 78.85% (entropy: 0.744)
+  Cluster 3: Female: 21.32%, Male: 78.68% (entropy: 0.747)
+  Cluster 4: Female: 7.90%, Male: 92.10% (entropy: 0.399)
+
+Representation Ratios (vs overall population):
+  Female:
+    Cluster 0: 1.09x (balanced)
+    Cluster 1: 0.67x (under)
+    Cluster 2: 1.09x (balanced)
+    Cluster 3: 1.10x (over)
+    Cluster 4: 0.41x (under)
+  Male:
+    Cluster 0: 0.98x (balanced)
+    Cluster 1: 1.08x (balanced)
+    Cluster 2: 0.98x (balanced)
+    Cluster 3: 0.98x (balanced)
+    Cluster 4: 1.14x (over)
+=== Fairness Report: race ===
+Overall Balance Score: 0.944
+Overall Entropy: 1.611
+
+Demographic Parity per Cluster:
+  Cluster 0: African-American: 45.06%, Asian: 0.60%, Caucasian: 34.33%, Hispanic: 11.88%, Native American: 0.16%, Other: 7.96% (entropy: 1.763)
+  Cluster 1: African-American: 68.72%, Asian: 0.20%, Caucasian: 23.71%, Hispanic: 5.45%, Native American: 0.40%, Other: 1.51% (entropy: 1.235)
+  Cluster 2: African-American: 30.65%, Asian: 0.63%, Caucasian: 52.12%, Hispanic: 10.26%, Native American: 0.13%, Other: 6.21% (entropy: 1.657)
+  Cluster 3: African-American: 62.99%, Asian: 0.28%, Caucasian: 27.00%, Hispanic: 6.13%, Native American: 0.28%, Other: 3.32% (entropy: 1.388)
+  Cluster 4: African-American: 77.66%, Asian: 0.00%, Caucasian: 15.80%, Hispanic: 4.09%, Native American: 0.82%, Other: 1.63% (entropy: 1.046)
+
+Representation Ratios (vs overall population):
+  African-American:
+    Cluster 0: 0.88x (under)
+    Cluster 1: 1.34x (over)
+    Cluster 2: 0.60x (under)
+    Cluster 3: 1.23x (over)
+    Cluster 4: 1.52x (over)
+  Asian:
+    Cluster 0: 1.35x (over)
+    Cluster 1: 0.45x (under)
+    Cluster 2: 1.43x (over)
+    Cluster 3: 0.63x (under)
+    Cluster 4: 0.00x (under)
+  Caucasian:
+    Cluster 0: 1.01x (balanced)
+    Cluster 1: 0.70x (under)
+    Cluster 2: 1.53x (over)
+    Cluster 3: 0.79x (under)
+    Cluster 4: 0.46x (under)
+  Hispanic:
+    Cluster 0: 1.35x (over)
+    Cluster 1: 0.62x (under)
+    Cluster 2: 1.16x (over)
+    Cluster 3: 0.69x (under)
+    Cluster 4: 0.46x (under)
+  Native American:
+    Cluster 0: 0.64x (under)
+    Cluster 1: 1.62x (over)
+    Cluster 2: 0.51x (under)
+    Cluster 3: 1.13x (over)
+    Cluster 4: 3.28x (over)
+  Other:
+    Cluster 0: 1.52x (over)
+    Cluster 1: 0.29x (under)
+    Cluster 2: 1.19x (over)
+    Cluster 3: 0.63x (under)
+    Cluster 4: 0.31x (under)
+
+Generating visualizations (tsne)...
+  Saved to visualization/clustering_results/2026-02-02/
+
+Done.

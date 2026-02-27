@@ -1,0 +1,14 @@
+usage: main.py [-h]
+               [--algorithm {dbscan,hdbscan,kmeans,bisectingkmeans,kprototypes}]
+               [--distance {euclidean,manhattan,gower}]
+               [--n_clusters N_CLUSTERS] [--n_min N_MIN] [--n_max N_MAX]
+               [--eps EPS] [--min_cluster_size MIN_CLUSTER_SIZE]
+               [--min_samples MIN_SAMPLES] [--max_iter MAX_ITER] [--seed SEED]
+               [--weight_gender WEIGHT_GENDER] [--weight_age WEIGHT_AGE]
+               [--y_true_col Y_TRUE_COL] [--y_pred_col Y_PRED_COL]
+               [--subset {TP,TN,FP,FN,TP_TN,FP_FN}]
+               [--projection {umap,pca,tsne}] [--regular_cols REGULAR_COLS]
+               [--sensitive_cols SENSITIVE_COLS] [--proxy_cols PROXY_COLS]
+               [--special_cols SPECIAL_COLS] --data_path DATA_PATH
+               [--save_plots] [--output_dir OUTPUT_DIR]
+main.py: error: unrecognized arguments:      
