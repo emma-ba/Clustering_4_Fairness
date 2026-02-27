@@ -13,14 +13,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-import umap
+# UMAP disabled - use tsne or pca instead
+# import umap
 from typing import Optional, Literal, Union
-from clustering import ClusteringResult
+from .clustering import ClusteringResult
 
-
+# NOTE: Use PCA when visualizing KMeans/BisectingKMeans results - PCA is a linear projection that preserves Euclidean distances (same metric KMeans uses). Use t-SNE when visualizing HDBSCAN/DBSCAN results - t-SNE preserves local neighborhood structure (same as density-based algorithms).  Mixing these (e.g., t-SNE for KMeans) will show misleading cluster boundaries because the projection uses different distance concepts than the algorithm. 
 def reduce_dimensions(
     X: np.ndarray,
-    method: Literal["umap", "pca", "tsne"] = "umap",
+    method: Literal["pca", "tsne"] = "tsne",
     n_components: int = 2,
     random_state: int = 42,
 ) -> np.ndarray:
@@ -31,8 +32,9 @@ def reduce_dimensions(
     ----------
     X : np.ndarray
         Feature matrix of shape (n_samples, n_features).
-    method : {"umap", "pca", "tsne"}, default="umap"
+    method : {"pca", "tsne"}, default="tsne"
         Dimensionality reduction method.
+        Note: UMAP is disabled. Use 'tsne' or 'pca' instead.
     n_components : int, default=2
         Number of output dimensions.
     random_state : int, default=42
@@ -46,12 +48,15 @@ def reduce_dimensions(
     if method == "pca":
         reducer = PCA(n_components=n_components, random_state=random_state)
     elif method == "umap":
-        reducer = umap.UMAP(
-            n_neighbors=15,
-            min_dist=0.1,
-            n_components=n_components,
-            random_state=random_state,
-        )
+        # UMAP is disabled - use tsne or pca instead
+        # To re-enable: uncomment 'import umap' at top and the code below
+        # reducer = umap.UMAP(
+        #     n_neighbors=15,
+        #     min_dist=0.1,
+        #     n_components=n_components,
+        #     random_state=random_state,
+        # )
+        raise ValueError("UMAP is disabled. Use 'tsne' or 'pca' instead.")
     elif method == "tsne":
         reducer = TSNE(
             n_components=n_components,
@@ -59,7 +64,7 @@ def reduce_dimensions(
             perplexity=30,
         )
     else:
-        raise ValueError(f"Unknown method: {method}")
+        raise ValueError(f"Unknown method: {method}. Use 'tsne' or 'pca'.")
 
     return reducer.fit_transform(X)
 
@@ -354,3 +359,138 @@ def visualize_clustering_result(
         )
 
     return figures
+
+
+def plot_silhouette_heatmap(
+    silhouette_values: np.ndarray,
+    row_labels: list,
+    title: str = "Silhouette Scores",
+    out_path: Optional[str] = None,
+    figsize: tuple = (4, 6),
+) -> plt.Figure:
+    """
+    Plot silhouette scores as a heatmap with inverted colors.
+
+    Parameters
+    ----------
+    silhouette_values : np.ndarray
+        Array of silhouette scores.
+    row_labels : list
+        Labels for each row (e.g., experimental conditions).
+    title : str, default="Silhouette Scores"
+        Plot title.
+    out_path : str, optional
+        Path to save the figure.
+    figsize : tuple, default=(4, 6)
+        Figure size.
+
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure object.
+    """
+    import seaborn as sns
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Use reversed colormap so higher=blue (better)
+    # vlag_r is the reversed version of vlag
+    data = np.array(silhouette_values).reshape(-1, 1)
+
+    sns.heatmap(
+        data,
+        annot=True,
+        fmt=".3f",
+        center=0,
+        cbar=True,
+        cmap="Blues",  # Blue colormap: higher values = darker blue = better
+        ax=ax,
+        yticklabels=row_labels,
+        xticklabels=["silhouette"],
+    )
+
+    ax.set_title(title)
+    ax.tick_params(axis='y', rotation=0)
+
+    plt.tight_layout()
+
+    if out_path:
+        fig.savefig(out_path, dpi=300, bbox_inches='tight')
+
+    return fig
+
+
+def plot_quality_metrics_heatmap(
+    metrics_df,
+    title: str = "Quality Metrics",
+    out_path: Optional[str] = None,
+    figsize: tuple = (8, 6),
+    silhouette_col: str = "silhouette",
+) -> plt.Figure:
+    """
+    Plot quality metrics heatmap with special handling for silhouette.
+
+    Parameters
+    ----------
+    metrics_df : pd.DataFrame
+        DataFrame with quality metrics. Index should be condition names.
+    title : str, default="Quality Metrics"
+        Plot title.
+    out_path : str, optional
+        Path to save the figure.
+    figsize : tuple, default=(8, 6)
+        Figure size.
+    silhouette_col : str, default="silhouette"
+        Name of the silhouette column.
+
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure object.
+    """
+    import seaborn as sns
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize,
+                             gridspec_kw={'width_ratios': [4, 1]})
+
+    # Left: p-value columns (lower=better, use vlag centered at 0.05)
+    pval_cols = [c for c in metrics_df.columns if c != silhouette_col]
+    if pval_cols:
+        sns.heatmap(
+            metrics_df[pval_cols],
+            annot=True,
+            fmt=".4f",
+            center=0.05,
+            cbar=False,
+            cmap=sns.color_palette("vlag", as_cmap=True),
+            ax=axes[0],
+            robust=True,
+        )
+        axes[0].set_title("P-values (lower=better)")
+        axes[0].xaxis.tick_top()
+        axes[0].tick_params(axis='x', which='major', length=0)
+        axes[0].tick_params(axis='y', which='major', length=0, pad=5)
+
+    # Right: silhouette column (higher=better, use Blues)
+    if silhouette_col in metrics_df.columns:
+        sns.heatmap(
+            metrics_df[[silhouette_col]],
+            annot=True,
+            fmt=".3f",
+            cbar=False,
+            cmap="Blues",  # Higher=darker blue=better
+            ax=axes[1],
+            yticklabels=False,
+        )
+        axes[1].set_title("Silhouette\n(higher=better)")
+        axes[1].xaxis.tick_top()
+        axes[1].tick_params(axis='x', which='major', length=0)
+        axes[1].tick_params(axis='y', which='major', length=0)
+
+    fig.suptitle(title, y=1.02)
+    plt.tight_layout()
+
+    if out_path:
+        fig.savefig(out_path, dpi=300, bbox_inches='tight')
+
+    return fig
