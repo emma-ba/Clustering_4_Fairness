@@ -1,0 +1,15 @@
+cond_name,error_mean,error_std,sex_Female_mean,sex_Female_std,race_African-American_mean,race_African-American_std,race_Caucasian_mean,race_Caucasian_std
++REG -sen -err -special,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+-reg +SEN -err -special,0.005654,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+-reg -sen -err +SPECIAL,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
++REG +SEN -err -special,0.003271,0.0007707626093681506,0.0,0.0,0.0,0.0,0.0,0.0
++REG -sen +ERR -special,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
++REG -sen -err +SPECIAL,0.008712666666666665,0.0005184605417322836,0.0,0.0,0.0,0.0,0.0,0.0
+-reg +SEN +ERR -special,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+-reg +SEN -err +SPECIAL,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+-reg -sen +ERR +SPECIAL,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
++REG +SEN +ERR -special,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
++REG +SEN -err +SPECIAL,6.666666666666666e-07,1.1547005383792516e-06,0.0,0.0,0.0,0.0,0.0,0.0
++REG -sen +ERR +SPECIAL,4.633333333333333e-05,5.608327142146162e-05,0.0,0.0,0.0,0.0,0.0,0.0
+-reg +SEN +ERR +SPECIAL,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
++REG +SEN +ERR +SPECIAL,0.00021933333333333334,2.2744962812309312e-05,0.0,0.0,0.0,0.0,0.0,0.0

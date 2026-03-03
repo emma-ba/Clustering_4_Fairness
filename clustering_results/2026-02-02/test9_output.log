@@ -1,0 +1,126 @@
+/Users/filip/RA/Clustering_4_Fairness/venv/lib/python3.12/site-packages/sklearn/cluster/_hdbscan/hdbscan.py:722: FutureWarning: The default value of `copy` will change from False to True in 1.10. Explicitly set a value for `copy` to silence this warning.
+  warn(
+Loading data...
+
+Clustering...
+  Algorithm: hdbscan
+  Distance: euclidean
+
+Results:
+  Clusters: 32
+  Noise: 2913
+  Silhouette: -0.232
+  Calinski-Harabasz: 290.9
+  Cluster sizes: {np.int64(0): np.int64(34), np.int64(1): np.int64(23), np.int64(2): np.int64(15), np.int64(3): np.int64(19), np.int64(4): np.int64(19), np.int64(5): np.int64(52), np.int64(6): np.int64(22), np.int64(7): np.int64(68), np.int64(8): np.int64(16), np.int64(9): np.int64(20), np.int64(10): np.int64(21), np.int64(11): np.int64(137), np.int64(12): np.int64(244), np.int64(13): np.int64(22), np.int64(14): np.int64(29), np.int64(15): np.int64(349), np.int64(16): np.int64(25), np.int64(17): np.int64(58), np.int64(18): np.int64(16), np.int64(19): np.int64(15), np.int64(20): np.int64(333), np.int64(21): np.int64(25), np.int64(22): np.int64(466), np.int64(23): np.int64(26), np.int64(24): np.int64(67), np.int64(25): np.int64(21), np.int64(26): np.int64(44), np.int64(27): np.int64(33), np.int64(28): np.int64(472), np.int64(29): np.int64(21), np.int64(30): np.int64(390), np.int64(31): np.int64(25), np.int64(-1): np.int64(2913)}
+
+Fairness evaluation:
+=== Fairness Report: gender ===
+Overall Balance Score: 0.868
+Overall Entropy: 0.859
+
+Demographic Parity per Cluster:
+  Cluster 0: F: 17.65%, M: 82.35% (entropy: 0.672)
+  Cluster 1: F: 21.74%, M: 78.26% (entropy: 0.755)
+  Cluster 2: F: 26.67%, M: 73.33% (entropy: 0.837)
+  Cluster 3: F: 36.84%, M: 63.16% (entropy: 0.949)
+  Cluster 4: F: 36.84%, M: 63.16% (entropy: 0.949)
+  Cluster 5: F: 38.46%, M: 61.54% (entropy: 0.961)
+  Cluster 6: F: 31.82%, M: 68.18% (entropy: 0.902)
+  Cluster 7: F: 44.12%, M: 55.88% (entropy: 0.990)
+  Cluster 8: F: 43.75%, M: 56.25% (entropy: 0.989)
+  Cluster 9: F: 55.00%, M: 45.00% (entropy: 0.993)
+  Cluster 10: F: 23.81%, M: 76.19% (entropy: 0.792)
+  Cluster 11: F: 29.20%, M: 70.80% (entropy: 0.871)
+  Cluster 12: F: 13.93%, M: 86.07% (entropy: 0.583)
+  Cluster 13: F: 18.18%, M: 81.82% (entropy: 0.684)
+  Cluster 14: F: 10.34%, M: 89.66% (entropy: 0.480)
+  Cluster 15: F: 10.32%, M: 89.68% (entropy: 0.479)
+  Cluster 16: F: 24.00%, M: 76.00% (entropy: 0.795)
+  Cluster 17: F: 22.41%, M: 77.59% (entropy: 0.768)
+  Cluster 18: F: 6.25%, M: 93.75% (entropy: 0.337)
+  Cluster 19: F: 80.00%, M: 20.00% (entropy: 0.722)
+  Cluster 20: F: 40.24%, M: 59.76% (entropy: 0.972)
+  Cluster 21: F: 72.00%, M: 28.00% (entropy: 0.855)
+  Cluster 22: F: 21.89%, M: 78.11% (entropy: 0.758)
+  Cluster 23: F: 19.23%, M: 80.77% (entropy: 0.706)
+  Cluster 24: F: 46.27%, M: 53.73% (entropy: 0.996)
+  Cluster 25: F: 33.33%, M: 66.67% (entropy: 0.918)
+  Cluster 26: F: 54.55%, M: 45.45% (entropy: 0.994)
+  Cluster 27: F: 45.45%, M: 54.55% (entropy: 0.994)
+  Cluster 28: F: 34.53%, M: 65.47% (entropy: 0.930)
+  Cluster 29: F: 23.81%, M: 76.19% (entropy: 0.792)
+  Cluster 30: F: 38.72%, M: 61.28% (entropy: 0.963)
+  Cluster 31: F: 36.00%, M: 64.00% (entropy: 0.943)
+
+Representation Ratios (vs overall population):
+  F:
+    Cluster 0: 0.62x (under)
+    Cluster 1: 0.77x (under)
+    Cluster 2: 0.94x (balanced)
+    Cluster 3: 1.30x (over)
+    Cluster 4: 1.30x (over)
+    Cluster 5: 1.36x (over)
+    Cluster 6: 1.12x (over)
+    Cluster 7: 1.56x (over)
+    Cluster 8: 1.55x (over)
+    Cluster 9: 1.94x (over)
+    Cluster 10: 0.84x (under)
+    Cluster 11: 1.03x (balanced)
+    Cluster 12: 0.49x (under)
+    Cluster 13: 0.64x (under)
+    Cluster 14: 0.37x (under)
+    Cluster 15: 0.36x (under)
+    Cluster 16: 0.85x (under)
+    Cluster 17: 0.79x (under)
+    Cluster 18: 0.22x (under)
+    Cluster 19: 2.83x (over)
+    Cluster 20: 1.42x (over)
+    Cluster 21: 2.54x (over)
+    Cluster 22: 0.77x (under)
+    Cluster 23: 0.68x (under)
+    Cluster 24: 1.64x (over)
+    Cluster 25: 1.18x (over)
+    Cluster 26: 1.93x (over)
+    Cluster 27: 1.61x (over)
+    Cluster 28: 1.22x (over)
+    Cluster 29: 0.84x (under)
+    Cluster 30: 1.37x (over)
+    Cluster 31: 1.27x (over)
+  M:
+    Cluster 0: 1.15x (over)
+    Cluster 1: 1.09x (balanced)
+    Cluster 2: 1.02x (balanced)
+    Cluster 3: 0.88x (under)
+    Cluster 4: 0.88x (under)
+    Cluster 5: 0.86x (under)
+    Cluster 6: 0.95x (balanced)
+    Cluster 7: 0.78x (under)
+    Cluster 8: 0.78x (under)
+    Cluster 9: 0.63x (under)
+    Cluster 10: 1.06x (balanced)
+    Cluster 11: 0.99x (balanced)
+    Cluster 12: 1.20x (over)
+    Cluster 13: 1.14x (over)
+    Cluster 14: 1.25x (over)
+    Cluster 15: 1.25x (over)
+    Cluster 16: 1.06x (balanced)
+    Cluster 17: 1.08x (balanced)
+    Cluster 18: 1.31x (over)
+    Cluster 19: 0.28x (under)
+    Cluster 20: 0.83x (under)
+    Cluster 21: 0.39x (under)
+    Cluster 22: 1.09x (balanced)
+    Cluster 23: 1.13x (over)
+    Cluster 24: 0.75x (under)
+    Cluster 25: 0.93x (balanced)
+    Cluster 26: 0.63x (under)
+    Cluster 27: 0.76x (under)
+    Cluster 28: 0.91x (balanced)
+    Cluster 29: 1.06x (balanced)
+    Cluster 30: 0.85x (under)
+    Cluster 31: 0.89x (under)
+
+Generating visualizations (tsne)...
+  Saved to visualization/clustering_results/2026-02-02/
+
+Done.

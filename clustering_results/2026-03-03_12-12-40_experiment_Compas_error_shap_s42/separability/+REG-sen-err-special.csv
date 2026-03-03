@@ -1,0 +1,10 @@
+,test,statistic,p_value
+race_African-American,kruskal,401.334,0.0
+age_scaled,kruskal,3035.5755,0.0
+Shap_decile_score_scaled,kruskal,1573.451,0.0
+Shap_priors_count_scaled,kruskal,1464.3333,0.0
+race_Caucasian,kruskal,225.3957,0.0
+decile_score_scaled,kruskal,2716.9608,0.0
+Shap_age_scaled,kruskal,1733.2942,0.0
+sex_Female,kruskal,53.3736,0.0
+priors_count_scaled,kruskal,1902.61,0.0

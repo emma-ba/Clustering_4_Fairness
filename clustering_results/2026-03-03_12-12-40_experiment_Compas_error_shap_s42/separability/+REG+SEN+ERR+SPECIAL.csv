@@ -1,0 +1,10 @@
+,test,statistic,p_value
+race_African-American,mannwhitneyu,4346031.5,0.0
+age_scaled,mannwhitneyu,1873154.0,0.0
+Shap_decile_score_scaled,mannwhitneyu,5773362.5,0.0
+Shap_priors_count_scaled,mannwhitneyu,5068531.5,0.0
+race_Caucasian,mannwhitneyu,2243025.5,0.0
+decile_score_scaled,mannwhitneyu,5786117.5,0.0
+Shap_age_scaled,mannwhitneyu,4665517.5,0.0
+sex_Female,mannwhitneyu,2882839.5,0.0
+priors_count_scaled,mannwhitneyu,4832560.5,0.0

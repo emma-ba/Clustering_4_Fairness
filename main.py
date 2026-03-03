@@ -1,4 +1,4 @@
-import os, argparse, sys
+import os, argparse, sys, re
 import numpy as np
 import pandas as pd
 from src.clustering import cluster
@@ -11,12 +11,14 @@ from src.fairness_metrics import evaluate_fairness, print_fairness_report
 from src.experiments import (
     create_exp_conditions,
     run_experiments, run_experiments_generic, make_chi_tests,
-    recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap
+    recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap,
+    separability_check
 )
 from datetime import datetime
 
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_DATE = datetime.now().strftime('%Y-%m-%d')
-OUTPUT_DIR = f"visualization/clustering_results/{SESSION_DATE}"
+OUTPUT_DIR = os.path.join(PROJECT_DIR, "visualization", "clustering_results", SESSION_DATE)
 DATA_DIR = "Data"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -136,13 +138,9 @@ def parse_args():
                         choices=["TP", "TN", "FP", "FN", "TP_TN", "FP_FN"],
                         help="Analyze only this confusion matrix subset (TP_TN=correct predictions, FP_FN=errors)")
 
-    # TODO: Detailed plots for each clusters. 
-    # TODO: assign output dir from project dir, not from root.
-    # TODO: Fix CSV to show all results. Disabeld for testing purposes (low prio)
-    # TODO: Start with regression afterwards. Maybe easier Regression > Ranking > Multi-class. 
-        #   Bulk of errors - from one class to another class. 
-    # TODO: 
-    # TODO: Make it optional to have the projection. 
+    # TODO: Start with regression afterwards. Maybe easier Regression > Ranking > Multi-class.
+        #   Bulk of errors - from one class to another class.
+    # TODO: Make it optional to have the projection.
     # Projection method
     parser.add_argument("--projection", type=str, default="tsne",
                         choices=["pca", "tsne"],
@@ -355,7 +353,7 @@ def run_batch_experiment(df, args, output_dir):
     plt.close()
     print(f"Saved: all_quali_heatmap.png")
 
-    # Generate per-condition recap heatmaps
+    # Generate per-condition recap heatmaps and composition plots
     if args.save_plots:
         print(f"\nGenerating {len(results['cond_name'])} recap heatmaps...")
         for i, cond_name in enumerate(results['cond_name']):
@@ -365,13 +363,74 @@ def run_batch_experiment(df, args, output_dir):
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
 
+        # Composition bar plots per condition x sensitive attribute
+        print(f"Generating composition plots...")
+        for i, cond_name in enumerate(results['cond_name']):
+            res_df = results['cond_res'][i]
+            labels = res_df['clusters'].values
+            if len(set(labels) - {-1}) > 1:
+                cond_clean = re.sub(r'\s+', '', cond_name)
+                for attr in sensitive_cols:
+                    plot_cluster_composition(labels, res_df[attr].values, attr,
+                        out_path=f"{output_dir}/{cond_clean}_composition_{attr}.png")
+                    plt.close()
+        print(f"Saved: composition plots")
+
+    # --- CSV outputs ---
+
+    # Summary CSV: one row per condition
+    summary_rows = []
+    for i, cond_name in enumerate(results['cond_name']):
+        recap = results['cond_recap'][i]
+        summary_rows.append({
+            'cond_name': cond_name,
+            'cond_descr': results['cond_descr'][i],
+            'n_clusters': len(recap),
+            'silhouette_avg': round(recap['silhouette'].mean(), 4) if 'silhouette' in recap.columns else np.nan,
+            'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else np.nan,
+        })
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df.to_csv(f"{output_dir}/results_summary.csv", index=False)
+    print(f"\nSaved: results_summary.csv")
+
+    # Per-condition recap CSVs
+    recap_dir = os.path.join(output_dir, "recap")
+    os.makedirs(recap_dir, exist_ok=True)
+    for i, cond_name in enumerate(results['cond_name']):
+        cond_clean = re.sub(r'\s+', '', cond_name)
+        results['cond_recap'][i].to_csv(f"{recap_dir}/{cond_clean}.csv", index=False)
+    print(f"Saved: {len(results['cond_name'])} recap CSVs in recap/")
+
+    # --- Separability tests (Mann-Whitney U / Kruskal-Wallis / Chi-squared) ---
+    sep_dir = os.path.join(output_dir, "separability")
+    os.makedirs(sep_dir, exist_ok=True)
+    all_cols_to_test = list(set(
+        parse_column_list(args.regular_cols)
+        + sensitive_cols
+        + parse_column_list(args.special_cols)
+    ))
+    print(f"\nRunning separability tests...")
+    for i, cond_name in enumerate(results['cond_name']):
+        res_df = results['cond_res'][i]
+        labels = res_df['clusters'].values
+        if len(set(labels) - {-1}) > 1:
+            sep_result = separability_check(res_df, labels, all_cols_to_test)
+            if not sep_result.empty:
+                cond_clean = re.sub(r'\s+', '', cond_name)
+                sep_result.to_csv(f"{sep_dir}/{cond_clean}.csv")
+    print(f"Saved: separability tests in separability/")
+
     print(f"\nAll outputs saved to: {output_dir}/")
     print("  - exp_condition.csv")
     print("  - chi_res.csv")
+    print("  - results_summary.csv")
+    print("  - recap/ (per-condition recap CSVs)")
+    print("  - separability/ (per-condition stat tests)")
     print("  - chi_res_heatmap.png")
     print("  - all_quali_heatmap.png")
     if args.save_plots:
         print(f"  - {len(results['cond_name'])} recap heatmaps")
+        print(f"  - composition plots")
 
     return results
 

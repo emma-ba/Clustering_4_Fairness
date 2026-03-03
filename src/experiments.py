@@ -355,9 +355,10 @@ def separability_check(data, labels, columns):
     """
     Test if clusters are significantly different across features.
 
-    Uses appropriate statistical test based on data type:
+    Uses appropriate statistical test based on data type and cluster count:
     - Categorical (object, category, bool): Chi-squared test
-    - Numeric: Kruskal-Wallis test (non-parametric ANOVA)
+    - Numeric, 2 clusters: Mann-Whitney U test
+    - Numeric, 3+ clusters: Kruskal-Wallis test
 
     Parameters
     ----------
@@ -374,7 +375,7 @@ def separability_check(data, labels, columns):
         DataFrame with columns: test, statistic, p_value
         Index is column names.
     """
-    from scipy.stats import kruskal
+    from scipy.stats import kruskal, mannwhitneyu
 
     results = {}
     unique_labels = [l for l in np.unique(labels) if l != -1]
@@ -400,20 +401,22 @@ def separability_check(data, labels, columns):
                 contingency = pd.crosstab(col_data, labels_filtered)
                 stat, p, dof, expected = chi2_contingency(contingency)
                 results[col] = {'test': 'chi2', 'statistic': round(stat, 4), 'p_value': round(p, 6)}
-            except Exception as e:
+            except Exception:
                 results[col] = {'test': 'chi2', 'statistic': np.nan, 'p_value': np.nan}
         else:
-            # Kruskal-Wallis for numeric (non-parametric ANOVA)
+            # Numeric: Mann-Whitney U (2 clusters) or Kruskal-Wallis (3+)
             try:
                 groups = [data_filtered[labels_filtered == l][col].dropna().values for l in unique_labels]
-                # Filter out empty groups
                 groups = [g for g in groups if len(g) > 0]
-                if len(groups) >= 2:
+                if len(groups) == 2:
+                    stat, p = mannwhitneyu(groups[0], groups[1], alternative='two-sided')
+                    results[col] = {'test': 'mannwhitneyu', 'statistic': round(stat, 4), 'p_value': round(p, 6)}
+                elif len(groups) >= 3:
                     stat, p = kruskal(*groups)
                     results[col] = {'test': 'kruskal', 'statistic': round(stat, 4), 'p_value': round(p, 6)}
                 else:
-                    results[col] = {'test': 'kruskal', 'statistic': np.nan, 'p_value': np.nan}
-            except Exception as e:
+                    results[col] = {'test': 'n/a', 'statistic': np.nan, 'p_value': np.nan}
+            except Exception:
                 results[col] = {'test': 'kruskal', 'statistic': np.nan, 'p_value': np.nan}
 
     return pd.DataFrame(results).T
