@@ -14,6 +14,7 @@ from .scoring import (
     ScoringFn,
     silhouette_scorer,
     make_chi2_error_scorer,
+    make_kruskal_error_scorer,
     make_chi2_sensitive_scorer,
     make_composite_scorer,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "ScoringFn",
     "silhouette_scorer",
     "make_chi2_error_scorer",
+    "make_kruskal_error_scorer",
     "make_chi2_sensitive_scorer",
     "make_composite_scorer",
     # visualization

@@ -89,10 +89,12 @@ def undo_dummy(data, with_Dummy, col_label, numeric_values=True, short_label=Non
 
 # Calculate average Error rate based on unscaled error rate by counting the amount of max values (1) and dividing them by the total nr of rows - replacing old accuracy_error() from V1
 # Does not work on scaled (binary) error features
-def get_error_rate(data, column='errors'):
+def get_error_rate(data, column='errors', error_type='binary'):
   if len(data) == 0:
     print ('calculating error rate on an empty set')
     return
+  if error_type == 'regression':
+    return data[column].mean()
   max_value = data[column].max()
   count_max_value = (data[column] == max_value).sum()
   average_error_rate = count_max_value / len(data)
@@ -218,7 +220,7 @@ def _expand_multiclass_cols(data, sensitive_cols):
   return data, expanded_cols
 
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary'):
   """
   Create recap of cluster info with error rates and sensitive feature proportions.
 
@@ -234,7 +236,9 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
       into per-value binary indicators.
       Defaults to ['race_African-American', 'race_Caucasian', 'sex_Female'] for backwards compat.
   error_col : str
-      Name of the binary error column. Default 'errors'.
+      Name of the error column. Default 'errors'.
+  error_type : str
+      'binary' for classification errors (0/1), 'regression' for continuous errors.
   """
   # Default sensitive cols for backwards compatibility
   if sensitive_cols is None:
@@ -252,11 +256,18 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   temp['count'] = 1
   recap = temp.groupby(['clusters'], as_index=False).sum()
 
-  # ...with number of error
-  recap['n_error'] = res.groupby(['clusters']).sum().astype(int)
+  if error_type == 'regression':
+    # Regression path: continuous error stats
+    recap['error_mean'] = res.groupby(['clusters'])[error_col].mean().values
+    recap['error_std'] = res.groupby(['clusters'])[error_col].std().values
+    recap['error_median'] = res.groupby(['clusters'])[error_col].median().values
+  else:
+    # Binary path: count-based error stats
+    # ...with number of error
+    recap['n_error'] = res.groupby(['clusters']).sum().astype(int)
 
-  # ...with 1-vs-All error diff
-  recap['error_rate'] = res.groupby(['clusters']).mean()
+    # ...with 1-vs-All error diff
+    recap['error_rate'] = res.groupby(['clusters']).mean()
 
   # Prepare Quality metrics
   diff_vs_rest = []
@@ -297,19 +308,31 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     rest_count = rest_recap['count'].sum()
 
     #### Quick test: differences in error rates
-    # Get error rate difference 1-vs-rest
-    rest_n_error = rest_recap['n_error'].sum()
-    rest_rate = rest_n_error / rest_count
-    diff_vs_rest.append(recap['error_rate'][c] - rest_rate)
-
-    # ...with Poisson stat test
-    # Deal with splits with 0 error
-    if((recap['n_error'][c] < 1) | (recap['count'][c] < 1) | (rest_n_error < 1) | (rest_count < 1)):
-      res = stats.poisson_means_test(recap['count'][c] - recap['n_error'][c], recap['count'][c], rest_count - rest_n_error, rest_count)
-      diff_p.append(round(res.pvalue, 3))
+    if error_type == 'regression':
+      # Regression: diff of means + Mann-Whitney U test
+      c_errors = c_data[error_col].values
+      rest_errors = rest_data[error_col].values
+      diff_vs_rest.append(round(c_errors.mean() - rest_errors.mean(), 6))
+      try:
+        from scipy.stats import mannwhitneyu
+        _, p = mannwhitneyu(c_errors, rest_errors, alternative='two-sided')
+        diff_p.append(round(p, 3))
+      except ValueError:
+        diff_p.append(np.nan)
     else:
-      res = stats.poisson_means_test(recap['n_error'][c], recap['count'][c], rest_n_error, rest_count)
-      diff_p.append(round(res.pvalue, 3))
+      # Binary: Get error rate difference 1-vs-rest
+      rest_n_error = rest_recap['n_error'].sum()
+      rest_rate = rest_n_error / rest_count
+      diff_vs_rest.append(recap['error_rate'][c] - rest_rate)
+
+      # ...with Poisson stat test
+      # Deal with splits with 0 error
+      if((recap['n_error'][c] < 1) | (recap['count'][c] < 1) | (rest_n_error < 1) | (rest_count < 1)):
+        res = stats.poisson_means_test(recap['count'][c] - recap['n_error'][c], recap['count'][c], rest_count - rest_n_error, rest_count)
+        diff_p.append(round(res.pvalue, 3))
+      else:
+        res = stats.poisson_means_test(recap['n_error'][c], recap['count'][c], rest_n_error, rest_count)
+        diff_p.append(round(res.pvalue, 3))
 
     ##### Sensitive features — dynamic loop (uses expanded columns)
     for col in sensitive_cols_expanded:
@@ -340,7 +363,12 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
 
   recap['silhouette'] = silhouette
 
-  recap['error_rate'] = np.around(recap['error_rate'] , 3)
+  if error_type == 'regression':
+    recap['error_mean'] = np.around(recap['error_mean'], 3)
+    recap['error_std'] = np.around(recap['error_std'], 3)
+    recap['error_median'] = np.around(recap['error_median'], 3)
+  else:
+    recap['error_rate'] = np.around(recap['error_rate'] , 3)
 
   recap.rename(columns={'clusters':'c'}, inplace=True)
 
@@ -445,13 +473,16 @@ def _get_sensitive_cols_from_recap(recap, sensitive_cols):
   return actual_cols
 
 
-def make_chi_tests(results, sensitive_cols=None):
+def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors'):
   """
-  Run chi-squared tests on cluster recaps for error and sensitive columns.
+  Run chi-squared / Kruskal-Wallis tests on cluster recaps for error and sensitive columns.
 
   Supports both binary and multi-class sensitive columns. For multi-class
   columns that were expanded by make_recap(), builds a full multi-row
   contingency table across all values.
+
+  For regression errors, uses Kruskal-Wallis H-test on raw error values
+  instead of chi-squared on contingency tables.
 
   Parameters
   ----------
@@ -459,6 +490,10 @@ def make_chi_tests(results, sensitive_cols=None):
       Results from run_experiments().
   sensitive_cols : list, optional
       Original sensitive column names. Defaults to ['race_African-American', 'race_Caucasian', 'sex_Female'].
+  error_type : str
+      'binary' for chi-squared on error counts, 'regression' for Kruskal-Wallis on raw errors.
+  error_col : str
+      Name of the error column in the data. Used for regression path.
   """
   if sensitive_cols is None:
     sensitive_cols = ['race_African-American', 'race_Caucasian', 'sex_Female']
@@ -487,12 +522,30 @@ def make_chi_tests(results, sensitive_cols=None):
       continue
 
     # Test error differences
-    test_data = recap[['count', 'n_error']].copy(deep=True)
-    test_data['count'] = test_data['count'] - test_data['n_error']
-    test_data = test_data.rename(columns={"count": "n_correct"})
-    test_data = test_data.transpose()
-    test_res = chi2_contingency(test_data)
-    chi_res['error'].append(round(test_res.pvalue, 6))
+    if error_type == 'regression':
+      # Kruskal-Wallis on raw continuous error values grouped by cluster
+      from scipy.stats import kruskal as kruskal_test
+      res_df = results['cond_res'][i]
+      cluster_labels = res_df['clusters'].values
+      unique_clusters = sorted(set(cluster_labels) - {-1})
+      groups = [res_df.loc[res_df['clusters'] == cl, error_col].values for cl in unique_clusters]
+      groups = [g for g in groups if len(g) > 0]
+      if len(groups) >= 2:
+        try:
+          _, p = kruskal_test(*groups)
+          chi_res['error'].append(round(p, 6))
+        except ValueError:
+          chi_res['error'].append(np.nan)
+      else:
+        chi_res['error'].append(np.nan)
+    else:
+      # Binary: chi-squared on [n_correct, n_error] contingency table
+      test_data = recap[['count', 'n_error']].copy(deep=True)
+      test_data['count'] = test_data['count'] - test_data['n_error']
+      test_data = test_data.rename(columns={"count": "n_correct"})
+      test_data = test_data.transpose()
+      test_res = chi2_contingency(test_data)
+      chi_res['error'].append(round(test_res.pvalue, 6))
 
     # Test each sensitive column (binary: 2x2 table, multi-class indicators: 2xN each)
     for col in actual_sensitive:
@@ -614,7 +667,10 @@ def plot_cluster_recap_heatmap(recap, cond_name, output_dir):
   recap = recap.sort_values(by=['diff_vs_rest'], ascending=False)
   recap['count'] = recap['count']/recap['count'].sum()
   recap = recap.rename(columns={"count": "size_prop"})
-  recap = recap.drop(['n_error','c'], axis=1)
+  drop_cols = ['c']
+  if 'n_error' in recap.columns:
+    drop_cols.append('n_error')
+  recap = recap.drop(drop_cols, axis=1)
 
   plt.figure(figsize=(10,4))
   ax = sns.heatmap(recap, annot=True, center=0, cbar=False,
@@ -641,7 +697,8 @@ def run_experiments(data, exp_condition,
                     eps=1,
                     seed=42,
                     sensitive_cols=None,
-                    error_col='errors'):
+                    error_col='errors',
+                    error_type='binary'):
   """
   Run all experimental conditions on the data.
 
@@ -666,7 +723,9 @@ def run_experiments(data, exp_condition,
   sensitive_cols : list, optional
       Sensitive columns for recap. Defaults to COMPAS columns.
   error_col : str
-      Name of the binary error column. Default 'errors'.
+      Name of the error column. Default 'errors'.
+  error_type : str
+      'binary' or 'regression'. Default 'binary'.
 
   Returns
   -------
@@ -691,7 +750,8 @@ def run_experiments(data, exp_condition,
                     eps=eps)
 
     recap = make_recap(res, exp_condition['feature_set'][i],
-                       sensitive_cols=sensitive_cols, error_col=error_col)
+                       sensitive_cols=sensitive_cols, error_col=error_col,
+                       error_type=error_type)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])
@@ -706,7 +766,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             max_iter=300, seed=42,
                             scoring_fn=None, sensitive_cols=None, error_col='errors',
                             min_cluster_size=15, min_samples=5, eps=0.5,
-                            min_datapoints=None, feature_weights=None):
+                            min_datapoints=None, feature_weights=None,
+                            error_type='binary'):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -738,7 +799,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
   sensitive_cols : list, optional
       Sensitive columns for recap.
   error_col : str
-      Name of the binary error column.
+      Name of the error column.
   min_cluster_size : int
       HDBSCAN min_cluster_size.
   min_samples : int
@@ -749,6 +810,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
       Minimum datapoints per cluster.
   feature_weights : dict, optional
       Feature weights for clustering.
+  error_type : str
+      'binary' or 'regression'. Default 'binary'.
 
   Returns
   -------
@@ -795,7 +858,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
       res_df['clusters'] = result.labels
 
     recap = make_recap(res_df, feature_set,
-                       sensitive_cols=sensitive_cols, error_col=error_col)
+                       sensitive_cols=sensitive_cols, error_col=error_col,
+                       error_type=error_type)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])

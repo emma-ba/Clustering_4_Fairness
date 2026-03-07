@@ -4,6 +4,7 @@ import pandas as pd
 from src.clustering import cluster
 from src.scoring import (
     make_chi2_error_scorer,
+    make_kruskal_error_scorer,
     make_chi2_sensitive_scorer, make_composite_scorer,
 )
 from src.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
@@ -155,7 +156,10 @@ def parse_args():
     parser.add_argument("--special_cols", type=str, default=None,
                           help="Special features like SHAP values (comma-separated column names)")
     parser.add_argument("--error_col", type=str, default=None,
-                        help="Binary error column for HBAC-DBSCAN splitting (required in experiment mode)")
+                        help="Error column for analysis. Binary (0/1) for classification, continuous for regression.")
+    parser.add_argument("--error_type", type=str, default="binary",
+                        choices=["binary", "regression"],
+                        help="Type of error column: 'binary' (classification 0/1) or 'regression' (continuous). Default: binary")
 
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
@@ -239,7 +243,10 @@ def run_batch_experiment(df, args, output_dir):
         if args.scoring == "chi2_error":
             if not error_col:
                 raise ValueError("--error_col required for chi2_error scoring")
-            scoring_fn = make_chi2_error_scorer(df[error_col].values)
+            if args.error_type == 'regression':
+                scoring_fn = make_kruskal_error_scorer(df[error_col].values)
+            else:
+                scoring_fn = make_chi2_error_scorer(df[error_col].values)
         elif args.scoring == "chi2_sensitive":
             if not sensitive_cols:
                 raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
@@ -257,6 +264,7 @@ def run_batch_experiment(df, args, output_dir):
                 silhouette_weight=cw.get('silhouette', 0.3),
                 error_weight=cw.get('error', 0.5),
                 fairness_weight=cw.get('fairness', 0.2),
+                error_type=args.error_type,
             )
 
     # Parse feature weights
@@ -278,7 +286,8 @@ def run_batch_experiment(df, args, output_dir):
             eps=args.eps,
             seed=args.seed,
             sensitive_cols=sensitive_cols,
-            error_col=error_col
+            error_col=error_col,
+            error_type=args.error_type,
         )
     else:
         # Generic path: kmeans, bisectingkmeans, kmedoids, kprototypes
@@ -299,6 +308,7 @@ def run_batch_experiment(df, args, output_dir):
             min_samples=args.min_samples,
             eps=args.eps,
             min_datapoints=args.min_datapoints,
+            error_type=args.error_type,
             feature_weights=feature_weights,
         )
 
@@ -311,23 +321,26 @@ def run_batch_experiment(df, args, output_dir):
         print(f"Condition {i+1}/{len(results['cond_name'])}: {cond_name.strip()}")
         print(f"  Clusters: {n_clusters}, Silhouette: {silhouette_avg:.3f}" if not np.isnan(silhouette_avg) else f"  Clusters: {n_clusters}")
 
-    # Generate chi-squared test results
-    chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols)
+    # Generate chi-squared / Kruskal-Wallis test results
+    chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols,
+                             error_type=args.error_type, error_col=error_col)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
     # Print chi-squared results summary
+    # Use actual sensitive columns from chi_res (may be expanded for multi-class)
+    actual_sensitive_cols = [c for c in chi_res.columns if c not in ('cond_descr', 'cond_name', 'error')]
     print("\nChi-squared test results:")
-    chi_display_cols = ['cond_name', 'error'] + sensitive_cols
+    chi_display_cols = ['cond_name', 'error'] + actual_sensitive_cols
     chi_display = chi_res[chi_display_cols].copy()
-    chi_display.columns = ['Condition', 'error'] + sensitive_cols
+    chi_display.columns = ['Condition', 'error'] + actual_sensitive_cols
     print(chi_display.to_string(index=False))
 
     # Generate quality metrics
     all_quali = recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=sensitive_cols)
 
     # Create chi-squared heatmap visualization
-    chi_viz_cols = ['error'] + sensitive_cols
+    chi_viz_cols = ['error'] + actual_sensitive_cols
     chi_res_viz = chi_res[chi_viz_cols].copy()
     chi_res_viz.index = chi_res['cond_name'].str.strip()
 
@@ -345,7 +358,7 @@ def run_batch_experiment(df, args, output_dir):
     print(f"Saved: chi_res_heatmap.png")
 
     # Create quality metrics heatmap
-    quali_viz_cols = ['error'] + sensitive_cols + ['silhouette']
+    quali_viz_cols = ['error'] + actual_sensitive_cols + ['silhouette']
     all_quali_viz = all_quali[quali_viz_cols].copy()
     all_quali_viz.index = all_quali['cond_name'].str.strip()
     plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png",
@@ -387,7 +400,8 @@ def run_batch_experiment(df, args, output_dir):
             'cond_descr': results['cond_descr'][i],
             'n_clusters': len(recap),
             'silhouette_avg': round(recap['silhouette'].mean(), 4) if 'silhouette' in recap.columns else np.nan,
-            'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else np.nan,
+            'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else (
+                round(recap['error_mean'].mean(), 4) if 'error_mean' in recap.columns else np.nan),
         })
     summary_df = pd.DataFrame(summary_rows)
     summary_df.to_csv(f"{output_dir}/results_summary.csv", index=False)
@@ -455,8 +469,22 @@ def main():
     session_date = datetime.now().strftime('%Y-%m-%d')
     dataset_name = os.path.splitext(os.path.basename(args.data_path))[0]
 
+    # Block subset for regression (TP/TN/FP/FN doesn't apply)
+    if args.error_type == 'regression' and args.subset:
+        raise ValueError("--subset (TP/TN/FP/FN) is not compatible with --error_type regression. "
+                         "Confusion matrix subsets only apply to binary classification.")
+
     print(f"Loading data...")
     df = pd.read_csv(args.data_path)
+
+    # Auto-compute regression error from y_true/y_pred if needed
+    if args.error_type == 'regression' and not args.error_col:
+        if args.y_true_col and args.y_pred_col:
+            df['_regression_error'] = (df[args.y_true_col] - df[args.y_pred_col]).abs()
+            args.error_col = '_regression_error'
+            print(f"  Auto-computed regression error: abs({args.y_true_col} - {args.y_pred_col})")
+        else:
+            raise ValueError("--error_type regression requires either --error_col or both --y_true_col and --y_pred_col")
 
     # Experiment mode: run all conditions
     if args.experiment:
@@ -604,7 +632,10 @@ def main():
         if args.scoring == "chi2_error":
             if not args.error_col:
                 raise ValueError("--error_col required for chi2_error scoring")
-            scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
+            if args.error_type == 'regression':
+                scoring_fn = make_kruskal_error_scorer(df[args.error_col].values, mask=scorer_mask)
+            else:
+                scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
         elif args.scoring == "chi2_sensitive":
             if not sensitive_cols:
                 raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
@@ -624,6 +655,7 @@ def main():
                 silhouette_weight=cw.get('silhouette', 0.3),
                 error_weight=cw.get('error', 0.5),
                 fairness_weight=cw.get('fairness', 0.2),
+                error_type=args.error_type,
             )
 
     # Run clustering

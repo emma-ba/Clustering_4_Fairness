@@ -12,7 +12,7 @@ to optimize cluster assignments for different objectives:
 import numpy as np
 from typing import Callable, Optional
 from sklearn.metrics import silhouette_score
-from scipy.stats import chi2_contingency
+from scipy.stats import chi2_contingency, kruskal
 
 # Type alias: takes (X, labels) -> float, higher = better
 ScoringFn = Callable[[np.ndarray, np.ndarray], float]
@@ -74,6 +74,47 @@ def make_chi2_error_scorer(
     return scorer
 
 
+def make_kruskal_error_scorer(
+    error_data: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+) -> ScoringFn:
+    """
+    Factory: returns a scorer that measures how well clusters separate continuous errors.
+
+    Uses Kruskal-Wallis H-test on continuous error values grouped by cluster.
+    Returns 1 - p_value (same interface as chi2 scorer: higher = better separation).
+
+    Parameters
+    ----------
+    error_data : np.ndarray
+        Continuous error column (e.g. absolute residuals) for all rows.
+    mask : np.ndarray, optional
+        Boolean mask applied during clustering (subset filtering).
+    """
+    data = error_data[mask] if mask is not None else error_data
+
+    def scorer(X: np.ndarray, labels: np.ndarray) -> float:
+        n_clusters = len(set(labels) - {-1})
+        if n_clusters < 2:
+            return 0.0
+        non_noise = labels != -1
+        err = data[non_noise] if len(data) == len(labels) else data[:len(labels)][non_noise]
+        lab = labels[non_noise]
+        unique_labels = sorted(set(lab))
+        groups = [err[lab == cl] for cl in unique_labels]
+        # Need at least 2 non-empty groups
+        groups = [g for g in groups if len(g) > 0]
+        if len(groups) < 2:
+            return 0.0
+        try:
+            _, p = kruskal(*groups)
+            return 1.0 - p  # higher = better error separation
+        except ValueError:
+            return 0.0
+
+    return scorer
+
+
 def make_chi2_sensitive_scorer(
     sensitive_data: np.ndarray,
     mask: Optional[np.ndarray] = None,
@@ -126,6 +167,7 @@ def make_composite_scorer(
     silhouette_weight: float = 0.3,
     error_weight: float = 0.5,
     fairness_weight: float = 0.2,
+    error_type: str = 'binary',
 ) -> ScoringFn:
     """
     Factory: weighted combination of silhouette, error separation, and fairness.
@@ -136,7 +178,7 @@ def make_composite_scorer(
     Parameters
     ----------
     error_data : np.ndarray
-        Binary error column (0/1).
+        Binary error column (0/1) or continuous error column (regression).
     sensitive_data : np.ndarray
         Sensitive attribute column.
     mask : np.ndarray, optional
@@ -147,8 +189,13 @@ def make_composite_scorer(
         Weight for error separation component (default 0.5).
     fairness_weight : float
         Weight for fairness component (default 0.2).
+    error_type : str
+        'binary' for chi2-based error scorer, 'regression' for Kruskal-Wallis.
     """
-    error_scorer = make_chi2_error_scorer(error_data, mask)
+    if error_type == 'regression':
+        error_scorer = make_kruskal_error_scorer(error_data, mask)
+    else:
+        error_scorer = make_chi2_error_scorer(error_data, mask)
     sensitive_scorer = make_chi2_sensitive_scorer(sensitive_data, mask)
 
     def scorer(X: np.ndarray, labels: np.ndarray) -> float:

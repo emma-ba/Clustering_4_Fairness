@@ -1,3 +1,0 @@
-c,count,n_error,error_rate,diff_vs_rest,diff_p,sex_Female_prop,sex_Female_diff,sex_Female_p,race_African-American_prop,race_African-American_diff,race_African-American_p,race_Caucasian_prop,race_Caucasian_diff,race_Caucasian_p,silhouette
-0,2240,940,0.42,0.061,0.001,0.158,-0.066,0.0,0.646,0.23,0.0,0.258,-0.141,0.0,0.19542979446071612
-1,2810,1008,0.359,-0.061,0.001,0.223,0.066,0.0,0.416,-0.23,0.0,0.4,0.141,0.0,0.3689528970291704
