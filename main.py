@@ -139,13 +139,10 @@ def parse_args():
                         choices=["TP", "TN", "FP", "FN", "TP_TN", "FP_FN"],
                         help="Analyze only this confusion matrix subset (TP_TN=correct predictions, FP_FN=errors)")
 
-    # TODO: Start with regression afterwards. Maybe easier Regression > Ranking > Multi-class.
-        #   Bulk of errors - from one class to another class.
-    # TODO: Make it optional to have the projection.
     # Projection method
     parser.add_argument("--projection", type=str, default="tsne",
-                        choices=["pca", "tsne"],
-                        help="Projection method for visualization ")
+                        choices=["pca", "tsne", "none"],
+                        help="Projection method for visualization (use 'none' to skip)")
 
     parser.add_argument("--regular_cols", type=str, default=None,                                                                                                                       
                           help="Regular features for clustering (comma-separated column names)")                                                                                          
@@ -400,8 +397,9 @@ def run_batch_experiment(df, args, output_dir):
             'cond_descr': results['cond_descr'][i],
             'n_clusters': len(recap),
             'silhouette_avg': round(recap['silhouette'].mean(), 4) if 'silhouette' in recap.columns else np.nan,
-            'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else (
-                round(recap['error_mean'].mean(), 4) if 'error_mean' in recap.columns else np.nan),
+            'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else np.nan,
+            'error_mean_avg': round(recap['error_mean'].mean(), 4) if 'error_mean' in recap.columns else np.nan,
+            'abs_error_mean_avg': round(recap['abs_error_mean'].mean(), 4) if 'abs_error_mean' in recap.columns else np.nan,
         })
     summary_df = pd.DataFrame(summary_rows)
     summary_df.to_csv(f"{output_dir}/results_summary.csv", index=False)
@@ -480,9 +478,9 @@ def main():
     # Auto-compute regression error from y_true/y_pred if needed
     if args.error_type == 'regression' and not args.error_col:
         if args.y_true_col and args.y_pred_col:
-            df['_regression_error'] = (df[args.y_true_col] - df[args.y_pred_col]).abs()
+            df['_regression_error'] = df[args.y_true_col] - df[args.y_pred_col]
             args.error_col = '_regression_error'
-            print(f"  Auto-computed regression error: abs({args.y_true_col} - {args.y_pred_col})")
+            print(f"  Auto-computed signed regression error: {args.y_true_col} - {args.y_pred_col}")
         else:
             raise ValueError("--error_type regression requires either --error_col or both --y_true_col and --y_pred_col")
 
@@ -728,18 +726,19 @@ def main():
     if args.save_plots:
         print(f"\nGenerating visualizations ({args.projection})...")
 
-        # For mixed-type data (kprototypes or gower), use only numeric columns for projection
-        if categorical_features and (args.algorithm == "kprototypes" or args.distance == "gower"):
-            numeric_mask = [i for i in range(result.feature_matrix.shape[1]) if i not in categorical_features]
-            X_for_viz = result.feature_matrix[:, numeric_mask].astype(float)
-        else:
-            X_for_viz = result.feature_matrix
+        if args.projection != "none":
+            # For mixed-type data (kprototypes or gower), use only numeric columns for projection
+            if categorical_features and (args.algorithm == "kprototypes" or args.distance == "gower"):
+                numeric_mask = [i for i in range(result.feature_matrix.shape[1]) if i not in categorical_features]
+                X_for_viz = result.feature_matrix[:, numeric_mask].astype(float)
+            else:
+                X_for_viz = result.feature_matrix
 
-        X_2d = reduce_dimensions(X_for_viz, method=args.projection)
+            X_2d = reduce_dimensions(X_for_viz, method=args.projection)
 
-        plot_clusters(X_2d, result.labels,
-                    title=f"Clusters ({args.algorithm}, {args.distance})",
-                    out_path=f"{output_dir}/clusters.png")                                                                                                                       
+            plot_clusters(X_2d, result.labels,
+                        title=f"Clusters ({args.algorithm}, {args.distance})",
+                        out_path=f"{output_dir}/clusters.png")                                                                                                                       
                                                                                                                                                                                         
         # Plot composition for each sensitive attribute                                                                                                                                 
         if sensitive_cols:                                                                                                                                                              

@@ -257,10 +257,13 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   recap = temp.groupby(['clusters'], as_index=False).sum()
 
   if error_type == 'regression':
-    # Regression path: continuous error stats
+    # Regression path: signed error stats (bias direction)
     recap['error_mean'] = res.groupby(['clusters'])[error_col].mean().values
     recap['error_std'] = res.groupby(['clusters'])[error_col].std().values
     recap['error_median'] = res.groupby(['clusters'])[error_col].median().values
+    # Absolute error stats (accuracy magnitude)
+    recap['abs_error_mean'] = res.groupby(['clusters'])[error_col].apply(lambda x: x.abs().mean()).values
+    recap['abs_error_median'] = res.groupby(['clusters'])[error_col].apply(lambda x: x.abs().median()).values
   else:
     # Binary path: count-based error stats
     # ...with number of error
@@ -367,6 +370,8 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     recap['error_mean'] = np.around(recap['error_mean'], 3)
     recap['error_std'] = np.around(recap['error_std'], 3)
     recap['error_median'] = np.around(recap['error_median'], 3)
+    recap['abs_error_mean'] = np.around(recap['abs_error_mean'], 3)
+    recap['abs_error_median'] = np.around(recap['abs_error_median'], 3)
   else:
     recap['error_rate'] = np.around(recap['error_rate'] , 3)
 

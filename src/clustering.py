@@ -97,6 +97,7 @@ def _find_best_k(
     random_state: int = 42,
     max_iter: int = 300,
     categorical_features: Optional[list] = None,
+    weights: Optional[np.ndarray] = None,
 ) -> tuple:
     """
     Search for the best k in [n_min, n_max] using the given scoring function.
@@ -136,7 +137,10 @@ def _find_best_k(
             clusterer = KMedoids(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X)
         elif algorithm == "kprototypes":
-            clusterer = KPrototypes(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
+            kp_kwargs = dict(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
+            if weights is not None:
+                kp_kwargs["gamma"] = 1
+            clusterer = KPrototypes(**kp_kwargs)
             labels = clusterer.fit_predict(X, categorical=categorical_features)
         else:
             raise ValueError(f"_find_best_k does not support algorithm: {algorithm}")
@@ -320,8 +324,6 @@ def cluster(
     elif algorithm in ("kmeans", "bisectingkmeans", "kmedoids", "kprototypes"):
         # Default scoring function if none provided
         _scoring = scoring_fn if scoring_fn is not None else silhouette_scorer
-        # TODO: There are some parameters in kprototypes, gamma, and it's not fixed, it's prediced from the data, that parameter will be changed. We need to assign gamma = 1 if we want to use feat. weights 
-        # TODO: Deal with numerical features too as sensitive - e.g. age
         # Validate kprototypes requirements
         if algorithm == "kprototypes":
             # NOTE: KPrototypes uses its own internal distance metric (Huang's cost function):
@@ -368,7 +370,10 @@ def cluster(
                 clusterer = KMedoids(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X)
             elif algorithm == "kprototypes":
-                clusterer = KPrototypes(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)
+                kp_kwargs = dict(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)
+                if weights is not None:
+                    kp_kwargs["gamma"] = 1
+                clusterer = KPrototypes(**kp_kwargs)
                 labels = clusterer.fit_predict(X, categorical=categorical_features)
 
         # Range-based k search using scoring function
@@ -377,6 +382,7 @@ def cluster(
                 X, n_min, n_max, algorithm, _scoring,
                 random_state=random_state, max_iter=max_iter,
                 categorical_features=categorical_features,
+                weights=weights,
             )
             print(f"  Best k={best_k} (score={best_score:.3f})")
 
