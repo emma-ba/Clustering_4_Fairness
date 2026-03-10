@@ -7,3 +7,5 @@ scripts
 visualization
 run_tests.sh
 clustering_results/
+__pycache__
+
