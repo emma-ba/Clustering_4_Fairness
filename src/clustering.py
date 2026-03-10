@@ -18,7 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from kmodes.kprototypes import KPrototypes
 from .scoring import ScoringFn, silhouette_scorer
-
+from sklearn_extra.cluster import KMedoids 
 @dataclass
 class ClusteringResult:
     """Container for clustering results and evaluation metrics."""
@@ -335,25 +335,26 @@ def cluster(
                 raise ValueError("kprototypes requires categorical_features to be specified")
 
         # KMedoids with precomputed Gower distance
-        if algorithm == "kmedoids" and distance == "gower":
-            dist_matrix = gower_distance(X, categorical_features, weights)
-            if n_clusters is not None:
-                from sklearn_extra.cluster import KMedoids
-                clusterer = KMedoids(n_clusters=n_clusters, metric="precomputed", random_state=random_state, max_iter=max_iter)
-                labels = clusterer.fit_predict(dist_matrix)
-            elif n_min is not None and n_max is not None:
-                from sklearn_extra.cluster import KMedoids as KMedoidsCls
-                best_score, best_k, best_labels = -np.inf, n_min, None
-                for k in range(n_min, n_max + 1):
-                    clusterer = KMedoidsCls(n_clusters=k, metric="precomputed", random_state=random_state, max_iter=max_iter)
+        if algorithm == "kmedoids":
+            if distance == "gower":
+                dist_matrix = gower_distance(X, categorical_features, weights)
+                if n_clusters is not None:
+                    
+                    clusterer = KMedoids(n_clusters=n_clusters, metric="precomputed", random_state=random_state, max_iter=max_iter)
                     labels = clusterer.fit_predict(dist_matrix)
-                    score = _scoring(X, labels)
-                    if score > best_score:
-                        best_score, best_k, best_labels = score, k, labels
-                print(f"  Best k={best_k} (score={best_score:.3f})")
-                labels = best_labels
-            else:
-                raise ValueError("n_clusters or n_min/n_max required for kmedoids")
+                elif n_min is not None and n_max is not None:
+                    
+                    best_score, best_k, best_labels = -np.inf, n_min, None
+                    for k in range(n_min, n_max + 1):
+                        clusterer = KMedoids(n_clusters=k, metric="precomputed", random_state=random_state, max_iter=max_iter)
+                        labels = clusterer.fit_predict(dist_matrix)
+                        score = _scoring(X, labels)
+                        if score > best_score:
+                            best_score, best_k, best_labels = score, k, labels
+                    print(f"  Best k={best_k} (score={best_score:.3f})")
+                    labels = best_labels
+                else:
+                    raise ValueError("n_clusters or n_min/n_max required for kmedoids")
 
         # Fixed k: create single clusterer
         elif n_clusters is not None:
@@ -366,7 +367,6 @@ def cluster(
                 clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X)
             elif algorithm == "kmedoids":
-                from sklearn_extra.cluster import KMedoids
                 clusterer = KMedoids(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X)
             elif algorithm == "kprototypes":

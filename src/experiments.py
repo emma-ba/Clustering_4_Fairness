@@ -471,8 +471,12 @@ def plot_cluster_recap_heatmap(recap, cond_name, output_dir):
     drop_cols.append('n_error')
   recap = recap.drop(drop_cols, axis=1)
 
-  plt.figure(figsize=(10,4))
-  ax = sns.heatmap(recap, annot=True, center=0, cbar=False,
+  n_cols = len(recap.columns)
+  n_rows = len(recap)
+  fig_width = max(10, n_cols * 0.9)
+  fig_height = max(4, n_rows * 1.2)
+  plt.figure(figsize=(fig_width, fig_height))
+  ax = sns.heatmap(recap, annot=True, fmt='.3g', center=0, cbar=False,
                    cmap=sns.color_palette("vlag", as_cmap=True), robust=True)
   ax.set_title(re.sub(' +', ' ', cond_name))
   ax.xaxis.tick_top()
