@@ -11,7 +11,7 @@ from src.visualization import reduce_dimensions, plot_clusters, plot_cluster_com
 from src.fairness_metrics import evaluate_fairness, print_fairness_report
 from src.experiments import (
     create_exp_conditions,
-    run_experiments, run_experiments_generic, make_chi_tests,
+    run_experiments_generic, make_recap, make_chi_tests,
     recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap,
     separability_check
 )
@@ -19,7 +19,7 @@ from datetime import datetime
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_DATE = datetime.now().strftime('%Y-%m-%d')
-OUTPUT_DIR = os.path.join(PROJECT_DIR, "visualization", "clustering_results", SESSION_DATE)
+OUTPUT_DIR = os.path.join(PROJECT_DIR, "clustering_results", SESSION_DATE)
 DATA_DIR = "Data"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -270,44 +270,27 @@ def run_batch_experiment(df, args, output_dir):
         args.feature_weights, regular_cols, sensitive_cols, special_cols, all_clustering_cols
     )
 
-    # Run all experiments — route by algorithm
-    if args.algorithm in ("hdbscan", "dbscan"):
-        # Existing HBAC-DBSCAN path (backwards compat)
-        results = run_experiments(
-            df,
-            exp_condition,
-            min_splittable_cluster_prop=0.05,
-            min_acceptable_cluster_prop=0.05,
-            min_acceptable_error_diff=0.005,
-            max_iter=100,
-            eps=args.eps,
-            seed=args.seed,
-            sensitive_cols=sensitive_cols,
-            error_col=error_col,
-            error_type=args.error_type,
-        )
-    else:
-        # Generic path: kmeans, bisectingkmeans, kmedoids, kprototypes
-        results = run_experiments_generic(
-            df,
-            exp_condition,
-            algorithm=args.algorithm,
-            distance=args.distance,
-            n_clusters=args.n_clusters,
-            n_min=args.n_min,
-            n_max=args.n_max,
-            max_iter=args.max_iter,
-            seed=args.seed,
-            scoring_fn=scoring_fn,
-            sensitive_cols=sensitive_cols,
-            error_col=error_col,
-            min_cluster_size=args.min_cluster_size,
-            min_samples=args.min_samples,
-            eps=args.eps,
-            min_datapoints=args.min_datapoints,
-            error_type=args.error_type,
-            feature_weights=feature_weights,
-        )
+    # Run all experiments
+    results = run_experiments_generic(
+        df,
+        exp_condition,
+        algorithm=args.algorithm,
+        distance=args.distance,
+        n_clusters=args.n_clusters,
+        n_min=args.n_min,
+        n_max=args.n_max,
+        max_iter=args.max_iter,
+        seed=args.seed,
+        scoring_fn=scoring_fn,
+        sensitive_cols=sensitive_cols,
+        error_col=error_col,
+        min_cluster_size=args.min_cluster_size,
+        min_samples=args.min_samples,
+        eps=args.eps,
+        min_datapoints=args.min_datapoints,
+        error_type=args.error_type,
+        feature_weights=feature_weights,
+    )
 
     # Print progress for each condition
     print()
@@ -709,18 +692,47 @@ def main():
             metrics = evaluate_fairness(result, attr_for_eval, attr_name)
             print(print_fairness_report(metrics, attr_name, attribute_labels=None))
 
+    # Build recap table (error stats, sensitive proportions, diff_vs_rest, p-values)
+    if args.error_col and result.n_clusters > 1:
+        res_df = df.copy()
+        if result.mask is not None:
+            res_df = res_df[result.mask].copy()
+        res_df['clusters'] = result.labels
+
+        recap = make_recap(res_df, clustering_cols,
+                           sensitive_cols=sensitive_cols,
+                           error_col=args.error_col,
+                           error_type=args.error_type)
+
+        # Save recap CSV
+        recap_dir = os.path.join(output_dir, "recap")
+        os.makedirs(recap_dir, exist_ok=True)
+        run_name = f"{args.algorithm}_{args.distance}_k{result.n_clusters}"
+        recap.to_csv(os.path.join(recap_dir, f"{run_name}.csv"), index=False)
+        print(f"\nSaved: recap/{run_name}.csv")
+
+        # Save recap heatmap
+        if args.save_plots and len(recap) > 1:
+            plot_cluster_recap_heatmap(recap.copy(), run_name, output_dir)
+            print(f"Saved: {run_name}.png")
+
     # Separability check (chi-squared for categorical, Kruskal-Wallis for numeric)
-    if args.separability_check:
-        from src.experiments import separability_check
-        print(f"\nSeparability check:")
-        # Get the data subset if applicable
-        df_for_sep = df if result.mask is None else df[result.mask]
-        all_cols_to_test = clustering_cols + sensitive_cols
+    df_for_sep = df if result.mask is None else df[result.mask]
+    all_cols_to_test = clustering_cols + sensitive_cols
+    if result.n_clusters > 1:
         sep_results = separability_check(df_for_sep, result.labels, all_cols_to_test)
         if not sep_results.empty:
-            print(sep_results.to_string())
-        else:
-            print("  Not enough clusters for separability analysis")
+            sep_dir = os.path.join(output_dir, "separability")
+            os.makedirs(sep_dir, exist_ok=True)
+            sep_name = f"{args.algorithm}_{args.distance}_k{result.n_clusters}"
+            sep_results.to_csv(os.path.join(sep_dir, f"{sep_name}.csv"))
+            print(f"Saved: separability/{sep_name}.csv")
+            if args.separability_check:
+                print(f"\nSeparability check:")
+                print(sep_results.to_string())
+    elif args.separability_check:
+        print("\nSeparability check:")
+        print("  Not enough clusters for separability analysis")
 
     # Visualization
     if args.save_plots:

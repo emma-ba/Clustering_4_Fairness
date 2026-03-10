@@ -2,10 +2,10 @@
 Experiment utilities for clustering fairness analysis.
 
 This module provides functions for:
-- Running HBAC (Hierarchical Binary Agglomerative Clustering) with DBSCAN
 - Creating result recap tables for each experimental condition
-- Chi-square tests for cluster quality
+- Chi-square / Kruskal-Wallis tests for cluster quality
 - Quality metrics summary
+- Running batch experiments with the generic cluster() function
 """
 
 import numpy as np
@@ -13,181 +13,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import re
-from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_samples
 from scipy import stats
 from scipy.stats import chi2_contingency
-from datetime import datetime
-
-# =============================================================================
-# Sets of Features (aka data columns)
-# =============================================================================
-
-# Master Dataset
-META_COL = ['clusters', 'new_clusters']
-META_COL_VIZ = ['Error_Type']
-
-ERROR_COL = ['errors', 'TP', 'TN', 'FN', 'FP']
-BASIC_COL = ['age', 'decile_score', 'priors_count']
-DUMMY_COL = ['sex_Female','race_African-American', 'race_Caucasian', 'race_Asian', 'race_Hispanic',
-                      'race_Native American', 'race_Other']
-
-ERROR_COL_scaled = ['errors']  
-BASIC_COL_scaled = ['age_scaled', 'decile_score_scaled', 'priors_count_scaled']
-DUMMY_COL_scaled = ['sex_Female_scaled', 'race_Native American_scaled','race_Other_scaled',
-                'race_African-American_scaled', 'race_Asian_scaled', 'race_Caucasian_scaled', 'race_Hispanic_scaled']
-DUMMY_COL_scaled_light = ['sex_Female_scaled', 'race_African-American_scaled', 'race_Caucasian_scaled']
-
-#SHAP is created on BASIC_COL_scaled and DUMMY_COL_scaled
-SHAP_BASIC = ['Shap_age', 'Shap_decile_score', 'Shap_priors_count']
-SHAP_DUMMY = ['Shap_sex_Female','Shap_race_African-American', 'Shap_race_Asian', 'Shap_race_Caucasian',
-                         'Shap_race_Hispanic', 'Shap_race_Native American', 'Shap_race_Other']
-
-SHAP_BASIC_scaled = ['Shap_age_scaled', 'Shap_decile_score_scaled', 'Shap_priors_count_scaled']
-SHAP_DUMMY_scaled = ['Shap_sex_Female_scaled','Shap_race_African-American_scaled',
-                     'Shap_race_Asian_scaled', 'Shap_race_Caucasian_scaled','Shap_race_Hispanic_scaled',
-                     'Shap_race_Native American_scaled', 'Shap_race_Other_scaled']
-SHAP_DUMMY_scaled_light = ['Shap_sex_Female_scaled','Shap_race_African-American_scaled','Shap_race_Caucasian_scaled']
-
-
-
-# =============================================================================
-# Utils for Data Prep
-# =============================================================================
-
-#Seperate TPFN & TNFP dataset
-'''Drop rows where both TP and FN are 0 '''
-def subset_TP_FN(data):
-    return data.loc[(data['TP'] == 1) | (data['FN'] == 1)]
-
-'''Drop rows where both TN and FP are 0'''
-def subset_TN_FP(data):
-    return data.loc[(data['TN'] == 1) | (data['FP'] == 1)]
-
-
-'''undo Dummy for DUMMY_RACE or DUMMY_GENDER'''
-def undo_dummy(data, with_Dummy, col_label, numeric_values=True, short_label=None):
-  data[col_label] = ''
-  for i, c in enumerate(with_Dummy):
-    values = np.sort(data[c].unique())
-    if numeric_values:
-      data.loc[data[c] == values[1], col_label] = i
-    else:
-      if short_label is None:
-        raise ValueError("short label must be provided if numeric_values is False")
-        data.loc[data[c] == values[1], col_label] = short_label[i]
-    data = data.drop(c, axis=1)
-  return(data)
-
-#data = undo_dummy(data, DUMMY_RACE, col_label='race', numeric_values=False, short_label=SHORT_LABEL_RACE)
-#data = undo_dummy(data, DUMMY_GENDER, col_label='gender', numeric_values=False, short_label=SHORT_LABEL_GENDER)
-
-
-# =============================================================================
-# Utils for Clustering
-# =============================================================================
-
-# Calculate average Error rate based on unscaled error rate by counting the amount of max values (1) and dividing them by the total nr of rows - replacing old accuracy_error() from V1
-# Does not work on scaled (binary) error features
-def get_error_rate(data, column='errors', error_type='binary'):
-  if len(data) == 0:
-    print ('calculating error rate on an empty set')
-    return
-  if error_type == 'regression':
-    return data[column].mean()
-  max_value = data[column].max()
-  count_max_value = (data[column] == max_value).sum()
-  average_error_rate = count_max_value / len(data)
-  return average_error_rate
-
-
-def get_next_cluster(data, cluster_col, min_size, all_cluster_ids, banned_clusters):
-  if(len(banned_clusters) != 0):
-    filter_tf = np.isin(all_cluster_ids, banned_clusters, invert=True)
-    all_cluster_ids = all_cluster_ids[filter_tf]
-
-  for candidate_cluster_id in all_cluster_ids:
-    if candidate_cluster_id == -1:
-      continue
-
-    #print ('This is the next cluster:', candidate_cluster_id)
-
-    candidate_cluster = data.loc[data[cluster_col] == candidate_cluster_id]
-
-    if len(candidate_cluster) < min_size:
-      #print('...it is too small:', len(candidate_cluster))
-      continue
-    else:
-      return(candidate_cluster_id)
-
-  #print('No suitable clusters were found!')
-  return(-1)
-
-
-# =============================================================================
-# HBAC DBSCAN Clustering
-# =============================================================================
-
-def hbac_dbscan(data, columns_to_use=[], error='errors',
-                exp_condition_name = '',
-                min_splittable_cluster_prop = 0.05,
-                min_acceptable_cluster_prop = 0.03,
-                min_acceptable_error_diff = 0.01,
-                max_iter=300,
-                eps = 1):
-
-    min_splittable_cluster_size = round(min_splittable_cluster_prop * len(data))  # Minimum size of cluster to be split
-    min_acceptable_cluster_size = round(min_acceptable_cluster_prop * len(data))  # Minimum acceptable size of cluster after split
-
-    # Initialize loop's variables
-    data['clusters'] = 0
-    banned_clusters = []
-
-    #### CLUSTERING LOOP
-    for i in range(1, max_iter):
-      # Init temporary cluster
-      data['new_clusters'] = None
-
-      ### Select the cluster to split in 2
-      x = get_next_cluster(data, 'clusters', min_splittable_cluster_size, data['clusters'].unique(), banned_clusters)
-      if(x == -1):
-        break
-
-      candidate_cluster = data.copy(deep=True)
-      candidate_cluster = candidate_cluster.loc[candidate_cluster['clusters'] == x]
-
-      #### SPLIT IN 2 SUB-CLUSTERS
-      model = DBSCAN(eps=eps, min_samples=min_acceptable_cluster_size).fit(candidate_cluster[columns_to_use])
-      candidate_cluster['new_clusters'] = model.labels_
-
-      # KEEP CLUSTER OR NOT
-      # ...are cluster size large enough?
-      l0 = len(candidate_cluster.loc[candidate_cluster['new_clusters'] == 0])
-      l1 = len(candidate_cluster.loc[candidate_cluster['new_clusters'] == 1])
-
-      if((l0 < min_acceptable_cluster_size) | (l1 < min_acceptable_cluster_size)):
-        #print('Bad split: too small')
-        banned_clusters.append(x)
-        continue
-
-      # ...is error rate difference large enough?
-      e0 = get_error_rate(candidate_cluster.loc[candidate_cluster['new_clusters'] == 0], column=error)
-      e1 = get_error_rate(candidate_cluster.loc[candidate_cluster['new_clusters'] == 1], column=error)
-
-      if(abs(e0 - e1) < min_acceptable_error_diff):
-        #print('Bad split: same error')
-        banned_clusters.append(x)
-        continue
-
-      ### Re-integrate to main data
-      data['new_clusters'] = candidate_cluster['new_clusters'].combine_first(data['new_clusters'])
-
-      # Make new Cluster IDs
-      new_id = data['clusters'].unique().max() + 1
-      data.loc[((data.clusters == x) & (data.new_clusters == 1)), 'clusters'] = new_id
-
-    #print('Max iterations reached:', i)
-    return data
 
 
 # =============================================================================
@@ -234,15 +62,13 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
       Sensitive columns to compute proportions for. Both binary (0/1) and
       multi-class columns are supported. Multi-class columns are auto-expanded
       into per-value binary indicators.
-      Defaults to ['race_African-American', 'race_Caucasian', 'sex_Female'] for backwards compat.
   error_col : str
       Name of the error column. Default 'errors'.
   error_type : str
       'binary' for classification errors (0/1), 'regression' for continuous errors.
   """
-  # Default sensitive cols for backwards compatibility
   if sensitive_cols is None:
-    sensitive_cols = ['race_African-American', 'race_Caucasian', 'sex_Female']
+    sensitive_cols = []
 
   # Expand multi-class sensitive columns into binary indicators
   data_result, sensitive_cols_expanded = _expand_multiclass_cols(data_result, sensitive_cols)
@@ -492,16 +318,16 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
   Parameters
   ----------
   results : dict
-      Results from run_experiments().
+      Results from run_experiments_generic().
   sensitive_cols : list, optional
-      Original sensitive column names. Defaults to ['race_African-American', 'race_Caucasian', 'sex_Female'].
+      Original sensitive column names.
   error_type : str
       'binary' for chi-squared on error counts, 'regression' for Kruskal-Wallis on raw errors.
   error_col : str
       Name of the error column in the data. Used for regression path.
   """
   if sensitive_cols is None:
-    sensitive_cols = ['race_African-American', 'race_Caucasian', 'sex_Female']
+    sensitive_cols = []
 
   # Determine actual columns from first recap
   if len(results['cond_recap']) > 0:
@@ -580,16 +406,13 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None):
   chi_res : pd.DataFrame
       Chi-squared test results.
   results : dict
-      Results from run_experiments().
+      Results from run_experiments_generic().
   exp_condition : pd.DataFrame
       Experimental conditions.
   sensitive_cols : list, optional
       Original sensitive column names. Actual columns used are inferred from
       chi_res (which may contain expanded multi-class indicator names).
   """
-  if sensitive_cols is None:
-    sensitive_cols = ['race_African-American', 'race_Caucasian', 'sex_Female']
-
   # Use whatever sensitive columns are actually in chi_res
   # (may be expanded multi-class names like 'race=0', 'race=1')
   skip_cols = {'cond_descr', 'cond_name', 'error'}
@@ -618,37 +441,8 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None):
 
 
 # =============================================================================
-# Utils for Visualization
+# Visualization
 # =============================================================================
-
-def tsne_plot_wClusters(data, title, perplexity, learning_rate, n_iter, alpha, size, tsne_columns, fig_prefix, output_dir=None):
-  from sklearn.manifold import TSNE
-
-  if output_dir is None:
-    SESSION_DATE = datetime.now().strftime('%Y-%m-%d')
-    output_dir = f'visualization/{SESSION_DATE}'
-
-  # Extract features for t-SNE and drop other_columns
-  tsne_features = data[tsne_columns]
-  other_columns = [col for col in data.columns if col not in tsne_features]
-  other_features = data[other_columns]
-
-  tsne = TSNE(n_components=2, perplexity=perplexity, learning_rate=learning_rate, n_iter=n_iter)
-  tsne_result = tsne.fit_transform(tsne_features)
-  tsne_df = pd.DataFrame(tsne_result, index = tsne_features.index, columns=['t-SNE Component 1', 't-SNE Component 2'])
-
-  temp_dataset = tsne_df.join(other_features, how='left')
-
-  # Create scatterplot using seaborn
-  scatterplot = sns.scatterplot(data=temp_dataset, x='t-SNE Component 1', y='t-SNE Component 2', alpha=alpha, s=size,
-                                hue="clusters", palette='tab10', style='Error_Type')
-  scatterplot.set_title(title)
-  scatterplot.legend(loc='center left', bbox_to_anchor=(1.0, 0.5), ncol=1)
-
-  plt.savefig(f'{output_dir}/' + fig_prefix+re.sub(' +', '', title)+'.png', bbox_inches='tight', pad_inches=0)
-  plt.show()
-  plt.close()
-
 
 def plot_quality_heatmap(all_quali_viz, output_path, figsize=(4,4)):
   """
@@ -694,78 +488,6 @@ def plot_cluster_recap_heatmap(recap, cond_name, output_dir):
 # Experiment Runner
 # =============================================================================
 
-def run_experiments(data, exp_condition,
-                    min_splittable_cluster_prop=0.05,
-                    min_acceptable_cluster_prop=0.05,
-                    min_acceptable_error_diff=0.005,
-                    max_iter=100,
-                    eps=1,
-                    seed=42,
-                    sensitive_cols=None,
-                    error_col='errors',
-                    error_type='binary'):
-  """
-  Run all experimental conditions on the data.
-
-  Parameters
-  ----------
-  data : pd.DataFrame
-      Input data with features and error columns.
-  exp_condition : pd.DataFrame
-      DataFrame with columns: feature_set_descr, feature_set_name, feature_set
-  min_splittable_cluster_prop : float
-      Minimum proportion of data for a cluster to be splittable.
-  min_acceptable_cluster_prop : float
-      Minimum proportion of data for a cluster to be acceptable.
-  min_acceptable_error_diff : float
-      Minimum error rate difference to accept a split.
-  max_iter : int
-      Maximum number of iterations for HBAC.
-  eps : float
-      DBSCAN eps parameter.
-  seed : int
-      Random seed for reproducibility.
-  sensitive_cols : list, optional
-      Sensitive columns for recap. Defaults to COMPAS columns.
-  error_col : str
-      Name of the error column. Default 'errors'.
-  error_type : str
-      'binary' or 'regression'. Default 'binary'.
-
-  Returns
-  -------
-  dict
-      Results dictionary with keys: cond_name, cond_descr, cond_res, cond_recap
-  """
-  np.random.seed(seed)
-
-  results = {'cond_name': [],
-            'cond_descr': [],
-            'cond_res': [],
-            'cond_recap': []}
-
-  for i in range(0, len(exp_condition)):
-    res = hbac_dbscan(data.copy(deep=True),
-                    columns_to_use = exp_condition['feature_set'][i],
-                    error=error_col,
-                    min_splittable_cluster_prop = min_splittable_cluster_prop,
-                    min_acceptable_cluster_prop = min_acceptable_cluster_prop,
-                    min_acceptable_error_diff = min_acceptable_error_diff,
-                    max_iter=max_iter,
-                    eps=eps)
-
-    recap = make_recap(res, exp_condition['feature_set'][i],
-                       sensitive_cols=sensitive_cols, error_col=error_col,
-                       error_type=error_type)
-
-    results['cond_name'].append(exp_condition['feature_set_name'][i])
-    results['cond_descr'].append(exp_condition['feature_set_descr'][i])
-    results['cond_res'].append(res)
-    results['cond_recap'].append(recap)
-
-  return results
-
-
 def run_experiments_generic(data, exp_condition, algorithm, distance,
                             n_clusters=None, n_min=None, n_max=None,
                             max_iter=300, seed=42,
@@ -777,9 +499,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
   Run all experimental conditions using the generic cluster() function.
 
   Works with any algorithm supported by cluster() (kmeans, bisectingkmeans,
-  kmedoids, kprototypes, dbscan, hdbscan). Returns the same dict format as
-  run_experiments() so downstream code (make_chi_tests, recap_quali_metrics,
-  heatmaps) works unchanged.
+  kmedoids, kprototypes, dbscan, hdbscan). Returns a dict that downstream
+  code (make_chi_tests, recap_quali_metrics, heatmaps) consumes.
 
   Parameters
   ----------
@@ -796,7 +517,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
   n_min, n_max : int, optional
       Range for k-search.
   max_iter : int
-      Maximum iterations (KMeans/BisectingKMeans).
+      Maximum iterations.
   seed : int
       Random seed.
   scoring_fn : callable, optional
@@ -852,8 +573,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
         feature_weights=feature_weights,
     )
 
-    # Build result DataFrame matching hbac_dbscan output format:
-    # original data + 'clusters' column
+    # Build result DataFrame: original data + 'clusters' column
     res_df = data.copy()
     if result.mask is not None:
       # Subset was applied: assign -1 to excluded rows, labels to included
@@ -872,34 +592,6 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
     results['cond_recap'].append(recap)
 
   return results
-
-
-def run_experiments_multiple_seeds(data, exp_condition, seeds=[42, 123, 456],
-                                   **kwargs):
-  """
-  Run experiments with multiple seeds for reproducibility analysis.
-
-  Parameters
-  ----------
-  data : pd.DataFrame
-      Input data.
-  exp_condition : pd.DataFrame
-      Experimental conditions.
-  seeds : list
-      List of random seeds to use.
-  **kwargs
-      Additional arguments passed to run_experiments.
-
-  Returns
-  -------
-  dict
-      Dictionary mapping seed -> results
-  """
-  all_results = {}
-  for seed in seeds:
-    print(f"Running with seed={seed}...")
-    all_results[seed] = run_experiments(data, exp_condition, seed=seed, **kwargs)
-  return all_results
 
 
 # =============================================================================
@@ -964,120 +656,6 @@ def create_exp_conditions(groups):
       feature_set_name.append(name)
       feature_set_descr.append(descr)
       feature_set.append(cols)
-
-  exp_condition = pd.DataFrame({'feature_set_descr': feature_set_descr,
-                                'feature_set_name': feature_set_name,
-                                'feature_set': feature_set})
-  return exp_condition
-
-
-def create_default_exp_conditions():
-  """
-  Create default experimental conditions for COMPAS dataset.
-
-  Define column groups for exp_condition (regular + sensitive + any_column)
-
-  Returns
-  -------
-  pd.DataFrame
-      DataFrame with feature_set_descr, feature_set_name, feature_set columns
-  """
-  feature_set_name = []
-  feature_set_descr = []
-  feature_set = []
-
-  ######### BASELINE HBAC
-  ### Does adding SHAP help the clustering?
-  # Baseline (Mitzal-Radheka)
-  feature_set_name.append(f'+REG +SEN  -err     -shap')
-  feature_set_descr.append('Baseline')
-  feature_set.append(BASIC_COL_scaled + DUMMY_COL_scaled_light)
-
-  # Baseline with Error (Selma)
-  feature_set_name.append('+REG +SEN +ERR  -shap')
-  feature_set_descr.append('Baseline with Error')
-  feature_set.append(BASIC_COL_scaled + DUMMY_COL_scaled_light + ERROR_COL_scaled)
-
-  # Adding SHAP values to Baseline (Mirthe;)
-  feature_set_name.append('+REG +SEN  -err    +SHAP')
-  feature_set_descr.append('Baseline with SHAP')
-  feature_set.append(BASIC_COL_scaled + DUMMY_COL_scaled_light + SHAP_BASIC_scaled + SHAP_DUMMY_scaled_light)
-
-  feature_set_name.append('+REG +SEN +ERR  +SHAP')
-  feature_set_descr.append('Baseline with SHAP & Error')
-  feature_set.append(BASIC_COL_scaled + DUMMY_COL_scaled_light + SHAP_BASIC_scaled + SHAP_DUMMY_scaled_light + ERROR_COL_scaled)
-
-
-  ############ SHAP-ONLY HBAC
-  ### Does SHAP alone allow to identify clusters?
-  # Using only SHAP values
-  feature_set_name.append('-reg    -sen    -err     +SHAP')
-  feature_set_descr.append('SHAP only')
-  feature_set.append(SHAP_BASIC_scaled + SHAP_DUMMY_scaled_light)
-
-  feature_set_name.append('-reg    -sen    +ERR  +SHAP')
-  feature_set_descr.append('SHAP only with Error')
-  feature_set.append(SHAP_BASIC_scaled + SHAP_DUMMY_scaled_light + ERROR_COL_scaled)
-
-
-
-  ############ ONLY SENSITIVE FEATURES
-  ### Do sensitive features alone allow to identify clusters?
-  # Using only Sensitive features
-  feature_set_name.append('-reg    +SEN  -err     -shap')
-  feature_set_descr.append('Sensitive features only')
-  feature_set.append(DUMMY_COL_scaled_light)
-
-  feature_set_name.append('-reg    +SEN +ERR   -shap')
-  feature_set_descr.append('Sensitive features with Error')
-  feature_set.append(DUMMY_COL_scaled_light + ERROR_COL_scaled)
-
-  ### Does adding SHAP help the clustering based on sensitive features?
-  # Using Sensitive features with SHAP values
-  feature_set_name.append('-reg    +SEN  -err     +SHAP_S')
-  feature_set_descr.append('Sensitive features with SHAP')
-  feature_set.append(DUMMY_COL_scaled_light + SHAP_DUMMY_scaled_light)
-
-  feature_set_name.append('-reg    +SEN +ERR  +SHAP_S')
-  feature_set_descr.append('Sensitive features with SHAP & Error')
-  feature_set.append(DUMMY_COL_scaled_light + SHAP_DUMMY_scaled_light + ERROR_COL_scaled)
-
-  # Using only SHAP of Sensitive features
-  feature_set_name.append('-reg    -sen    -err     +SHAP_S')
-  feature_set_descr.append('Only SHAP of Sensitive features')
-  feature_set.append(SHAP_DUMMY_scaled_light)
-
-  feature_set_name.append('-reg    -sen    +ERR  +SHAP_S')
-  feature_set_descr.append('Only SHAP of Sensitive features')
-  feature_set.append(SHAP_DUMMY_scaled_light + ERROR_COL_scaled)
-
-
-  ############ ONLY REGULAR FEATURES
-  #conditons without sensitive to check how much it explains the results
-  feature_set_name.append('+REG -sen    -err     -shap')
-  feature_set_descr.append('REG Only')
-  feature_set.append(BASIC_COL_scaled)
-
-  feature_set_name.append('+REG -sen    +ERR  -shap')
-  feature_set_descr.append('REG & ERROR')
-  feature_set.append(BASIC_COL_scaled + ERROR_COL_scaled)
-
-  feature_set_name.append('+REG -sen    -err     +SHAP_R')
-  feature_set_descr.append('REG & SHAP')
-  feature_set.append(SHAP_BASIC_scaled + BASIC_COL_scaled) # ERROR FIXED
-
-  feature_set_name.append('+REG -sen    +ERR  +SHAP_R')
-  feature_set_descr.append('REG, ERROR & SHAP')
-  feature_set.append(SHAP_BASIC_scaled + BASIC_COL_scaled + ERROR_COL_scaled) # ERROR FIXED
-
-  # Using only SHAP of Regular features
-  feature_set_name.append('-reg    -sen    -err     +SHAP_R')
-  feature_set_descr.append('Only SHAP of Regular features')
-  feature_set.append(SHAP_BASIC_scaled)
-
-  feature_set_name.append('-reg    -sen    +ERR  +SHAP_R')
-  feature_set_descr.append('Only SHAP of Regular features + Error')
-  feature_set.append(SHAP_BASIC_scaled + ERROR_COL_scaled)
 
   exp_condition = pd.DataFrame({'feature_set_descr': feature_set_descr,
                                 'feature_set_name': feature_set_name,
