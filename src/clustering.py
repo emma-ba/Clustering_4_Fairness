@@ -17,6 +17,7 @@ from sklearn.cluster import DBSCAN, HDBSCAN, KMeans, BisectingKMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from kmodes.kprototypes import KPrototypes
+from sklearn_extra.cluster import KMedoids
 from .scoring import ScoringFn, silhouette_scorer
 
 @dataclass
@@ -132,7 +133,6 @@ def _find_best_k(
             clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X)
         elif algorithm == "kmedoids":
-            from sklearn_extra.cluster import KMedoids
             clusterer = KMedoids(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X)
         elif algorithm == "kprototypes":
@@ -335,14 +335,13 @@ def cluster(
         if algorithm == "kmedoids" and distance == "gower":
             dist_matrix = gower_distance(X, categorical_features, weights)
             if n_clusters is not None:
-                from sklearn_extra.cluster import KMedoids
+                
                 clusterer = KMedoids(n_clusters=n_clusters, metric="precomputed", random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(dist_matrix)
             elif n_min is not None and n_max is not None:
-                from sklearn_extra.cluster import KMedoids as KMedoidsCls
                 best_score, best_k, best_labels = -np.inf, n_min, None
                 for k in range(n_min, n_max + 1):
-                    clusterer = KMedoidsCls(n_clusters=k, metric="precomputed", random_state=random_state, max_iter=max_iter)
+                    clusterer = KMedoids(n_clusters=k, metric="precomputed", random_state=random_state, max_iter=max_iter)
                     labels = clusterer.fit_predict(dist_matrix)
                     score = _scoring(X, labels)
                     if score > best_score:
@@ -363,7 +362,6 @@ def cluster(
                 clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X)
             elif algorithm == "kmedoids":
-                from sklearn_extra.cluster import KMedoids
                 clusterer = KMedoids(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X)
             elif algorithm == "kprototypes":
