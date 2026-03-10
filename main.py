@@ -1,22 +1,25 @@
-import os, argparse, sys
+import os, argparse, sys, re
 import numpy as np
 import pandas as pd
 from src.clustering import cluster
 from src.scoring import (
-    silhouette_scorer, make_chi2_error_scorer,
+    make_chi2_error_scorer,
+    make_kruskal_error_scorer,
     make_chi2_sensitive_scorer, make_composite_scorer,
 )
 from src.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
 from src.fairness_metrics import evaluate_fairness, print_fairness_report
 from src.experiments import (
-    create_default_exp_conditions, create_exp_conditions,
-    run_experiments, make_chi_tests,
-    recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap
+    create_exp_conditions,
+    run_experiments_generic, make_recap, make_chi_tests,
+    recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap,
+    separability_check
 )
 from datetime import datetime
 
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_DATE = datetime.now().strftime('%Y-%m-%d')
-OUTPUT_DIR = f"visualization/clustering_results/{SESSION_DATE}"
+OUTPUT_DIR = os.path.join(PROJECT_DIR, "clustering_results", SESSION_DATE)
 DATA_DIR = "Data"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -79,12 +82,12 @@ def parse_args():
                         choices=["euclidean", "manhattan", "gower"],
                         help="Distance metric")
     
-    parser.add_argument("--n_clusters", type=int, default=5,
-                        help="Exact number of clusters (mutually exclusive with n_min/n_max)")
-    parser.add_argument("--n_min", type=int, default=2,
-                        help="Minimum number of clusters (for range-based search)")
-    parser.add_argument("--n_max", type=int, default=10,
-                        help="Maximum number of clusters (for range-based search")
+    parser.add_argument("--n_clusters", type=int, default=None,
+                        help="Exact number of clusters (mutually exclusive with n_min/n_max). Defaults to 5 if neither n_min/n_max is given.")
+    parser.add_argument("--n_min", type=int, default=None,
+                        help="Minimum number of clusters (for range-based k search)")
+    parser.add_argument("--n_max", type=int, default=None,
+                        help="Maximum number of clusters (for range-based k search)")
 
 #DBSCAN parameters                                                                                                                                                          
     parser.add_argument("--eps", type=float, default=0.5,                                                                                                                               
@@ -125,7 +128,7 @@ def parse_args():
 
     # Statistical tests
     parser.add_argument("--separability_check", action="store_true",
-                        help="Run chi-squared/Kruskal-Wallis tests on clusters")
+                        help="Run chi-squared tests on clusters")
 
     parser.add_argument("--y_true_col", type=str, default=None,                                                                                                                         
                           help="Column name for ground truth labels (for subset filtering)")                                                                                              
@@ -138,8 +141,8 @@ def parse_args():
 
     # Projection method
     parser.add_argument("--projection", type=str, default="tsne",
-                        choices=["pca", "tsne"],
-                        help="Projection method for visualization (UMAP disabled)")
+                        choices=["pca", "tsne", "none"],
+                        help="Projection method for visualization (use 'none' to skip)")
 
     parser.add_argument("--regular_cols", type=str, default=None,                                                                                                                       
                           help="Regular features for clustering (comma-separated column names)")                                                                                          
@@ -150,7 +153,10 @@ def parse_args():
     parser.add_argument("--special_cols", type=str, default=None,
                           help="Special features like SHAP values (comma-separated column names)")
     parser.add_argument("--error_col", type=str, default=None,
-                        help="Binary error column for HBAC-DBSCAN splitting (required in experiment mode)")
+                        help="Error column for analysis. Binary (0/1) for classification, continuous for regression.")
+    parser.add_argument("--error_type", type=str, default="binary",
+                        choices=["binary", "regression"],
+                        help="Type of error column: 'binary' (classification 0/1) or 'regression' (continuous). Default: binary")
 
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
@@ -228,18 +234,62 @@ def run_batch_experiment(df, args, output_dir):
     exp_condition_save.to_csv(f"{output_dir}/exp_condition.csv", index=False)
     print(f"\nSaved: exp_condition.csv")
 
+    # Build scoring function for k-selection (same logic as single-run mode)
+    scoring_fn = None
+    if args.scoring != "silhouette":
+        if args.scoring == "chi2_error":
+            if not error_col:
+                raise ValueError("--error_col required for chi2_error scoring")
+            if args.error_type == 'regression':
+                scoring_fn = make_kruskal_error_scorer(df[error_col].values)
+            else:
+                scoring_fn = make_chi2_error_scorer(df[error_col].values)
+        elif args.scoring == "chi2_sensitive":
+            if not sensitive_cols:
+                raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
+            scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values)
+        elif args.scoring == "composite":
+            if not error_col or not sensitive_cols:
+                raise ValueError("--error_col and --sensitive_cols required for composite scoring")
+            cw = {}
+            for pair in args.composite_weights.split(','):
+                name, w = pair.strip().split(':')
+                cw[name.strip()] = float(w.strip())
+            scoring_fn = make_composite_scorer(
+                df[error_col].values,
+                df[sensitive_cols[0]].values,
+                silhouette_weight=cw.get('silhouette', 0.3),
+                error_weight=cw.get('error', 0.5),
+                fairness_weight=cw.get('fairness', 0.2),
+                error_type=args.error_type,
+            )
+
+    # Parse feature weights
+    all_clustering_cols = regular_cols + special_cols
+    feature_weights = parse_feature_weights(
+        args.feature_weights, regular_cols, sensitive_cols, special_cols, all_clustering_cols
+    )
+
     # Run all experiments
-    results = run_experiments(
+    results = run_experiments_generic(
         df,
         exp_condition,
-        min_splittable_cluster_prop=0.05,
-        min_acceptable_cluster_prop=0.05,
-        min_acceptable_error_diff=0.005,
-        max_iter=100,
-        eps=1,
+        algorithm=args.algorithm,
+        distance=args.distance,
+        n_clusters=args.n_clusters,
+        n_min=args.n_min,
+        n_max=args.n_max,
+        max_iter=args.max_iter,
         seed=args.seed,
+        scoring_fn=scoring_fn,
         sensitive_cols=sensitive_cols,
-        error_col=error_col
+        error_col=error_col,
+        min_cluster_size=args.min_cluster_size,
+        min_samples=args.min_samples,
+        eps=args.eps,
+        min_datapoints=args.min_datapoints,
+        error_type=args.error_type,
+        feature_weights=feature_weights,
     )
 
     # Print progress for each condition
@@ -251,23 +301,26 @@ def run_batch_experiment(df, args, output_dir):
         print(f"Condition {i+1}/{len(results['cond_name'])}: {cond_name.strip()}")
         print(f"  Clusters: {n_clusters}, Silhouette: {silhouette_avg:.3f}" if not np.isnan(silhouette_avg) else f"  Clusters: {n_clusters}")
 
-    # Generate chi-squared test results
-    chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols)
+    # Generate chi-squared / Kruskal-Wallis test results
+    chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols,
+                             error_type=args.error_type, error_col=error_col)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
     # Print chi-squared results summary
+    # Use actual sensitive columns from chi_res (may be expanded for multi-class)
+    actual_sensitive_cols = [c for c in chi_res.columns if c not in ('cond_descr', 'cond_name', 'error')]
     print("\nChi-squared test results:")
-    chi_display_cols = ['cond_name', 'error'] + sensitive_cols
+    chi_display_cols = ['cond_name', 'error'] + actual_sensitive_cols
     chi_display = chi_res[chi_display_cols].copy()
-    chi_display.columns = ['Condition', 'error'] + sensitive_cols
+    chi_display.columns = ['Condition', 'error'] + actual_sensitive_cols
     print(chi_display.to_string(index=False))
 
     # Generate quality metrics
     all_quali = recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=sensitive_cols)
 
     # Create chi-squared heatmap visualization
-    chi_viz_cols = ['error'] + sensitive_cols
+    chi_viz_cols = ['error'] + actual_sensitive_cols
     chi_res_viz = chi_res[chi_viz_cols].copy()
     chi_res_viz.index = chi_res['cond_name'].str.strip()
 
@@ -285,7 +338,7 @@ def run_batch_experiment(df, args, output_dir):
     print(f"Saved: chi_res_heatmap.png")
 
     # Create quality metrics heatmap
-    quali_viz_cols = ['error'] + sensitive_cols + ['silhouette']
+    quali_viz_cols = ['error'] + actual_sensitive_cols + ['silhouette']
     all_quali_viz = all_quali[quali_viz_cols].copy()
     all_quali_viz.index = all_quali['cond_name'].str.strip()
     plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png",
@@ -293,7 +346,7 @@ def run_batch_experiment(df, args, output_dir):
     plt.close()
     print(f"Saved: all_quali_heatmap.png")
 
-    # Generate per-condition recap heatmaps
+    # Generate per-condition recap heatmaps and composition plots
     if args.save_plots:
         print(f"\nGenerating {len(results['cond_name'])} recap heatmaps...")
         for i, cond_name in enumerate(results['cond_name']):
@@ -303,24 +356,116 @@ def run_batch_experiment(df, args, output_dir):
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
 
+        # Composition bar plots per condition x sensitive attribute
+        print(f"Generating composition plots...")
+        for i, cond_name in enumerate(results['cond_name']):
+            res_df = results['cond_res'][i]
+            labels = res_df['clusters'].values
+            if len(set(labels) - {-1}) > 1:
+                cond_clean = re.sub(r'\s+', '', cond_name)
+                for attr in sensitive_cols:
+                    plot_cluster_composition(labels, res_df[attr].values, attr,
+                        out_path=f"{output_dir}/{cond_clean}_composition_{attr}.png")
+                    plt.close()
+        print(f"Saved: composition plots")
+
+    # --- CSV outputs ---
+
+    # Summary CSV: one row per condition
+    summary_rows = []
+    for i, cond_name in enumerate(results['cond_name']):
+        recap = results['cond_recap'][i]
+        summary_rows.append({
+            'cond_name': cond_name,
+            'cond_descr': results['cond_descr'][i],
+            'n_clusters': len(recap),
+            'silhouette_avg': round(recap['silhouette'].mean(), 4) if 'silhouette' in recap.columns else np.nan,
+            'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else np.nan,
+            'error_mean_avg': round(recap['error_mean'].mean(), 4) if 'error_mean' in recap.columns else np.nan,
+            'abs_error_mean_avg': round(recap['abs_error_mean'].mean(), 4) if 'abs_error_mean' in recap.columns else np.nan,
+        })
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df.to_csv(f"{output_dir}/results_summary.csv", index=False)
+    print(f"\nSaved: results_summary.csv")
+
+    # Per-condition recap CSVs
+    recap_dir = os.path.join(output_dir, "recap")
+    os.makedirs(recap_dir, exist_ok=True)
+    for i, cond_name in enumerate(results['cond_name']):
+        cond_clean = re.sub(r'\s+', '', cond_name)
+        results['cond_recap'][i].to_csv(f"{recap_dir}/{cond_clean}.csv", index=False)
+    print(f"Saved: {len(results['cond_name'])} recap CSVs in recap/")
+
+    # --- Separability tests (Mann-Whitney U / Kruskal-Wallis / Chi-squared) ---
+    sep_dir = os.path.join(output_dir, "separability")
+    os.makedirs(sep_dir, exist_ok=True)
+    all_cols_to_test = list(set(
+        parse_column_list(args.regular_cols)
+        + sensitive_cols
+        + parse_column_list(args.special_cols)
+    ))
+    print(f"\nRunning separability tests...")
+    for i, cond_name in enumerate(results['cond_name']):
+        res_df = results['cond_res'][i]
+        labels = res_df['clusters'].values
+        if len(set(labels) - {-1}) > 1:
+            sep_result = separability_check(res_df, labels, all_cols_to_test)
+            if not sep_result.empty:
+                cond_clean = re.sub(r'\s+', '', cond_name)
+                sep_result.to_csv(f"{sep_dir}/{cond_clean}.csv")
+    print(f"Saved: separability tests in separability/")
+
     print(f"\nAll outputs saved to: {output_dir}/")
     print("  - exp_condition.csv")
     print("  - chi_res.csv")
+    print("  - results_summary.csv")
+    print("  - recap/ (per-condition recap CSVs)")
+    print("  - separability/ (per-condition stat tests)")
     print("  - chi_res_heatmap.png")
     print("  - all_quali_heatmap.png")
     if args.save_plots:
         print(f"  - {len(results['cond_name'])} recap heatmaps")
+        print(f"  - composition plots")
 
     return results
 
 
 def main():
     args = parse_args()
+
+    # Resolve n_clusters / n_min / n_max defaults:
+    # If n_min or n_max given - range search (fill in the other if missing)
+    # If neither -  default to n_clusters=5
+    if args.n_min is not None or args.n_max is not None:
+        if args.n_clusters is not None:
+            print("Warning: --n_clusters ignored when --n_min/--n_max are provided")
+            args.n_clusters = None
+        if args.n_min is None:
+            args.n_min = 2
+        if args.n_max is None:
+            args.n_max = 10
+    elif args.n_clusters is None:
+        args.n_clusters = 5
+
     session_date = datetime.now().strftime('%Y-%m-%d')
     dataset_name = os.path.splitext(os.path.basename(args.data_path))[0]
 
+    # Block subset for regression (TP/TN/FP/FN doesn't apply)
+    if args.error_type == 'regression' and args.subset:
+        raise ValueError("--subset (TP/TN/FP/FN) is not compatible with --error_type regression. "
+                         "Confusion matrix subsets only apply to binary classification.")
+
     print(f"Loading data...")
     df = pd.read_csv(args.data_path)
+
+    # Auto-compute regression error from y_true/y_pred if needed
+    if args.error_type == 'regression' and not args.error_col:
+        if args.y_true_col and args.y_pred_col:
+            df['_regression_error'] = df[args.y_true_col] - df[args.y_pred_col]
+            args.error_col = '_regression_error'
+            print(f"  Auto-computed signed regression error: {args.y_true_col} - {args.y_pred_col}")
+        else:
+            raise ValueError("--error_type regression requires either --error_col or both --y_true_col and --y_pred_col")
 
     # Experiment mode: run all conditions
     if args.experiment:
@@ -344,11 +489,11 @@ def main():
                 # Save per-seed metadata
                 metadata = pd.DataFrame([{
                     'seed': seed,
-                    'algorithm': 'hbac_dbscan',
-                    'distance': 'euclidean',
+                    'algorithm': args.algorithm,
+                    'distance': args.distance,
                     'dataset': dataset_name,
                     'timestamp': full_timestamp,
-                    'scoring_method': 'N/A',
+                    'scoring_method': args.scoring,
                 }])
                 metadata.to_csv(os.path.join(seed_dir, 'metadata.csv'), index=False)
                 args.seed = seed
@@ -388,11 +533,11 @@ def main():
         # Save metadata
         metadata = pd.DataFrame([{
             'seed': args.seed,
-            'algorithm': 'hbac_dbscan',
-            'distance': 'euclidean',
+            'algorithm': args.algorithm,
+            'distance': args.distance,
             'dataset': dataset_name,
             'timestamp': full_timestamp,
-            'scoring_method': 'N/A',
+            'scoring_method': args.scoring,
         }])
         metadata.to_csv(os.path.join(output_dir, 'metadata.csv'), index=False)
         run_batch_experiment(df, args, output_dir)
@@ -468,7 +613,10 @@ def main():
         if args.scoring == "chi2_error":
             if not args.error_col:
                 raise ValueError("--error_col required for chi2_error scoring")
-            scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
+            if args.error_type == 'regression':
+                scoring_fn = make_kruskal_error_scorer(df[args.error_col].values, mask=scorer_mask)
+            else:
+                scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
         elif args.scoring == "chi2_sensitive":
             if not sensitive_cols:
                 raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
@@ -488,6 +636,7 @@ def main():
                 silhouette_weight=cw.get('silhouette', 0.3),
                 error_weight=cw.get('error', 0.5),
                 fairness_weight=cw.get('fairness', 0.2),
+                error_type=args.error_type,
             )
 
     # Run clustering
@@ -543,35 +692,65 @@ def main():
             metrics = evaluate_fairness(result, attr_for_eval, attr_name)
             print(print_fairness_report(metrics, attr_name, attribute_labels=None))
 
+    # Build recap table (error stats, sensitive proportions, diff_vs_rest, p-values)
+    if args.error_col and result.n_clusters > 1:
+        res_df = df.copy()
+        if result.mask is not None:
+            res_df = res_df[result.mask].copy()
+        res_df['clusters'] = result.labels
+
+        recap = make_recap(res_df, clustering_cols,
+                           sensitive_cols=sensitive_cols,
+                           error_col=args.error_col,
+                           error_type=args.error_type)
+
+        # Save recap CSV
+        recap_dir = os.path.join(output_dir, "recap")
+        os.makedirs(recap_dir, exist_ok=True)
+        run_name = f"{args.algorithm}_{args.distance}_k{result.n_clusters}"
+        recap.to_csv(os.path.join(recap_dir, f"{run_name}.csv"), index=False)
+        print(f"\nSaved: recap/{run_name}.csv")
+
+        # Save recap heatmap
+        if args.save_plots and len(recap) > 1:
+            plot_cluster_recap_heatmap(recap.copy(), run_name, output_dir)
+            print(f"Saved: {run_name}.png")
+
     # Separability check (chi-squared for categorical, Kruskal-Wallis for numeric)
-    if args.separability_check:
-        from src.experiments import separability_check
-        print(f"\nSeparability check:")
-        # Get the data subset if applicable
-        df_for_sep = df if result.mask is None else df[result.mask]
-        all_cols_to_test = clustering_cols + sensitive_cols
+    df_for_sep = df if result.mask is None else df[result.mask]
+    all_cols_to_test = clustering_cols + sensitive_cols
+    if result.n_clusters > 1:
         sep_results = separability_check(df_for_sep, result.labels, all_cols_to_test)
         if not sep_results.empty:
-            print(sep_results.to_string())
-        else:
-            print("  Not enough clusters for separability analysis")
+            sep_dir = os.path.join(output_dir, "separability")
+            os.makedirs(sep_dir, exist_ok=True)
+            sep_name = f"{args.algorithm}_{args.distance}_k{result.n_clusters}"
+            sep_results.to_csv(os.path.join(sep_dir, f"{sep_name}.csv"))
+            print(f"Saved: separability/{sep_name}.csv")
+            if args.separability_check:
+                print(f"\nSeparability check:")
+                print(sep_results.to_string())
+    elif args.separability_check:
+        print("\nSeparability check:")
+        print("  Not enough clusters for separability analysis")
 
     # Visualization
     if args.save_plots:
         print(f"\nGenerating visualizations ({args.projection})...")
 
-        # For mixed-type data (kprototypes or gower), use only numeric columns for projection
-        if categorical_features and (args.algorithm == "kprototypes" or args.distance == "gower"):
-            numeric_mask = [i for i in range(result.feature_matrix.shape[1]) if i not in categorical_features]
-            X_for_viz = result.feature_matrix[:, numeric_mask].astype(float)
-        else:
-            X_for_viz = result.feature_matrix
+        if args.projection != "none":
+            # For mixed-type data (kprototypes or gower), use only numeric columns for projection
+            if categorical_features and (args.algorithm == "kprototypes" or args.distance == "gower"):
+                numeric_mask = [i for i in range(result.feature_matrix.shape[1]) if i not in categorical_features]
+                X_for_viz = result.feature_matrix[:, numeric_mask].astype(float)
+            else:
+                X_for_viz = result.feature_matrix
 
-        X_2d = reduce_dimensions(X_for_viz, method=args.projection)
+            X_2d = reduce_dimensions(X_for_viz, method=args.projection)
 
-        plot_clusters(X_2d, result.labels,
-                    title=f"Clusters ({args.algorithm}, {args.distance})",
-                    out_path=f"{output_dir}/clusters.png")                                                                                                                       
+            plot_clusters(X_2d, result.labels,
+                        title=f"Clusters ({args.algorithm}, {args.distance})",
+                        out_path=f"{output_dir}/clusters.png")                                                                                                                       
                                                                                                                                                                                         
         # Plot composition for each sensitive attribute                                                                                                                                 
         if sensitive_cols:                                                                                                                                                              

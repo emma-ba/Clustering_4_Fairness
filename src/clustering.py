@@ -11,7 +11,7 @@ This module provides a flexible clustering function that supports:
 
 import numpy as np
 import pandas as pd
-from typing import Optional, Literal, Union, Callable
+from typing import Optional, Literal, Union
 from dataclasses import dataclass
 from sklearn.cluster import DBSCAN, HDBSCAN, KMeans, BisectingKMeans
 from sklearn.preprocessing import StandardScaler
@@ -19,7 +19,7 @@ from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from kmodes.kprototypes import KPrototypes
 from sklearn_extra.cluster import KMedoids
 from .scoring import ScoringFn, silhouette_scorer
-
+from sklearn_extra.cluster import KMedoids 
 @dataclass
 class ClusteringResult:
     """Container for clustering results and evaluation metrics."""
@@ -98,6 +98,7 @@ def _find_best_k(
     random_state: int = 42,
     max_iter: int = 300,
     categorical_features: Optional[list] = None,
+    weights: Optional[np.ndarray] = None,
 ) -> tuple:
     """
     Search for the best k in [n_min, n_max] using the given scoring function.
@@ -136,7 +137,10 @@ def _find_best_k(
             clusterer = KMedoids(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X)
         elif algorithm == "kprototypes":
-            clusterer = KPrototypes(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
+            kp_kwargs = dict(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
+            if weights is not None:
+                kp_kwargs["gamma"] = 1
+            clusterer = KPrototypes(**kp_kwargs)
             labels = clusterer.fit_predict(X, categorical=categorical_features)
         else:
             raise ValueError(f"_find_best_k does not support algorithm: {algorithm}")
@@ -320,7 +324,6 @@ def cluster(
     elif algorithm in ("kmeans", "bisectingkmeans", "kmedoids", "kprototypes"):
         # Default scoring function if none provided
         _scoring = scoring_fn if scoring_fn is not None else silhouette_scorer
-
         # Validate kprototypes requirements
         if algorithm == "kprototypes":
             # NOTE: KPrototypes uses its own internal distance metric (Huang's cost function):
@@ -332,24 +335,26 @@ def cluster(
                 raise ValueError("kprototypes requires categorical_features to be specified")
 
         # KMedoids with precomputed Gower distance
-        if algorithm == "kmedoids" and distance == "gower":
-            dist_matrix = gower_distance(X, categorical_features, weights)
-            if n_clusters is not None:
-                
-                clusterer = KMedoids(n_clusters=n_clusters, metric="precomputed", random_state=random_state, max_iter=max_iter)
-                labels = clusterer.fit_predict(dist_matrix)
-            elif n_min is not None and n_max is not None:
-                best_score, best_k, best_labels = -np.inf, n_min, None
-                for k in range(n_min, n_max + 1):
-                    clusterer = KMedoids(n_clusters=k, metric="precomputed", random_state=random_state, max_iter=max_iter)
+        if algorithm == "kmedoids":
+            if distance == "gower":
+                dist_matrix = gower_distance(X, categorical_features, weights)
+                if n_clusters is not None:
+                    
+                    clusterer = KMedoids(n_clusters=n_clusters, metric="precomputed", random_state=random_state, max_iter=max_iter)
                     labels = clusterer.fit_predict(dist_matrix)
-                    score = _scoring(X, labels)
-                    if score > best_score:
-                        best_score, best_k, best_labels = score, k, labels
-                print(f"  Best k={best_k} (score={best_score:.3f})")
-                labels = best_labels
-            else:
-                raise ValueError("n_clusters or n_min/n_max required for kmedoids")
+                elif n_min is not None and n_max is not None:
+                    
+                    best_score, best_k, best_labels = -np.inf, n_min, None
+                    for k in range(n_min, n_max + 1):
+                        clusterer = KMedoids(n_clusters=k, metric="precomputed", random_state=random_state, max_iter=max_iter)
+                        labels = clusterer.fit_predict(dist_matrix)
+                        score = _scoring(X, labels)
+                        if score > best_score:
+                            best_score, best_k, best_labels = score, k, labels
+                    print(f"  Best k={best_k} (score={best_score:.3f})")
+                    labels = best_labels
+                else:
+                    raise ValueError("n_clusters or n_min/n_max required for kmedoids")
 
         # Fixed k: create single clusterer
         elif n_clusters is not None:
@@ -365,7 +370,10 @@ def cluster(
                 clusterer = KMedoids(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X)
             elif algorithm == "kprototypes":
-                clusterer = KPrototypes(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)
+                kp_kwargs = dict(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)
+                if weights is not None:
+                    kp_kwargs["gamma"] = 1
+                clusterer = KPrototypes(**kp_kwargs)
                 labels = clusterer.fit_predict(X, categorical=categorical_features)
 
         # Range-based k search using scoring function
@@ -374,6 +382,7 @@ def cluster(
                 X, n_min, n_max, algorithm, _scoring,
                 random_state=random_state, max_iter=max_iter,
                 categorical_features=categorical_features,
+                weights=weights,
             )
             print(f"  Best k={best_k} (score={best_score:.3f})")
 

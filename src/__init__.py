@@ -6,7 +6,7 @@ Modules:
 - scoring: Scoring functions for fairness-aware k-selection
 - visualization: Plotting functions for cluster analysis
 - fairness_metrics: Metrics for evaluating demographic representation in clusters
-- experiments: Experiment utilities for HBAC clustering and result analysis
+- experiments: Experiment utilities for batch clustering and result analysis
 """
 
 from .clustering import cluster, ClusteringResult, gower_distance
@@ -14,6 +14,7 @@ from .scoring import (
     ScoringFn,
     silhouette_scorer,
     make_chi2_error_scorer,
+    make_kruskal_error_scorer,
     make_chi2_sensitive_scorer,
     make_composite_scorer,
 )
@@ -35,17 +36,12 @@ from .fairness_metrics import (
     print_fairness_report,
 )
 from .experiments import (
-    hbac_dbscan,
     make_recap,
     make_chi_tests,
     recap_quali_metrics,
-    run_experiments,
-    run_experiments_multiple_seeds,
-    create_default_exp_conditions,
+    run_experiments_generic,
     create_exp_conditions,
-    get_error_rate,
-    subset_TP_FN,
-    subset_TN_FP,
+    separability_check,
 )
 
 __all__ = [
@@ -57,6 +53,7 @@ __all__ = [
     "ScoringFn",
     "silhouette_scorer",
     "make_chi2_error_scorer",
+    "make_kruskal_error_scorer",
     "make_chi2_sensitive_scorer",
     "make_composite_scorer",
     # visualization
@@ -75,15 +72,10 @@ __all__ = [
     "compute_balance_score",
     "print_fairness_report",
     # experiments
-    "hbac_dbscan",
     "make_recap",
     "make_chi_tests",
     "recap_quali_metrics",
-    "run_experiments",
-    "run_experiments_multiple_seeds",
-    "create_default_exp_conditions",
+    "run_experiments_generic",
     "create_exp_conditions",
-    "get_error_rate",
-    "subset_TP_FN",
-    "subset_TN_FP",
+    "separability_check",
 ]
