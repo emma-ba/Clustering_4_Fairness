@@ -3,5 +3,4 @@ matplotlib
 scikit-learn
 scikit-learn-extra
 hdbscan
-# cornac
 kmodes                                                                                                                                        

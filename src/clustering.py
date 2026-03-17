@@ -230,9 +230,7 @@ def cluster(
     else:
         feature_names = None
         X = features.copy()
-
-
-
+        
     # Compute mask for confusion matrix subset
     mask = None
     if subset is not None:

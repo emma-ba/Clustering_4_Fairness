@@ -89,7 +89,7 @@ def parse_args():
     parser.add_argument("--n_max", type=int, default=None,
                         help="Maximum number of clusters (for range-based k search)")
 
-#DBSCAN parameters                                                                                                                                                          
+    #DBSCAN parameters       
     parser.add_argument("--eps", type=float, default=0.5,                                                                                                                               
                         help="Maximum distance between samples for neighborhood (DBSCAN)")
     
@@ -145,7 +145,24 @@ def parse_args():
                         help="Projection method for visualization (use 'none' to skip)")
 
     parser.add_argument("--regular_cols", type=str, default=None,                                                                                                                       
-                          help="Regular features for clustering (comma-separated column names)")                                                                                          
+                          help="Regular features for clustering (comma-separated column names)")              
+    # TODODONE: DHIGH PRIO. Statistical tests for numeric sensitive features. When 2 groups: Mann-Whitney. For more than 2 groups: Kruskal-Wallis.                                                                        
+    #TODODONE : Save results at the global level. 1 table for each exp condition, 1 assessment metric
+    # TODODONE - to review: Save results at individual level, have 1 set of results for each exp condition, where we have this in 1 csv, with 1 rule per cluste & 1vall stat test     
+    # TODODONE: Do a PCA for the result too for each exp condition. 
+    # TODOto review: Assess the feasibility of using the error as an input feature to the clustering or oversample the datapints. e.g. SMOTE for binary features
+    # TODODONE: prepare demo of how to use the code now for testing, and present to others in an easy way. Make a README showing how it works and go through it during the meeting.
+    # TODO: Experiment with Health Data. Not a priority. 
+    # TODO: Parse crimes columns percentages by groups to make sense
+    # TODO Create a new environment
+    # TODO: Do the IQR for the student age, instead of having all ages. For numeric snesitive features ,we have 2 columns, the iqr and the P-value. 
+    # TODO: Improve descriptions of arguments in READMe so that they are more self-explanatory.
+    # TODO: Look into journales that take research artifacts. Or a DEMO at a conference.
+    # TODO: Look into finding hte number of clusters if it works or not. Should wokr
+    # TODO : Try clustering iteratively. 
+    # TODO: Try rescaling the data. 
+    # TODO: Try resampling the data, to keep the sample 50% errors, 50% non-errors. 
+    # TODO: 
     parser.add_argument("--sensitive_cols", type=str, default=None,
                         help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")                                                                                           
     parser.add_argument("--proxy_cols", type=str, default=None,                                                                                                                         
@@ -161,8 +178,8 @@ def parse_args():
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
     # Output
-    parser.add_argument("--save_plots", action="store_true",
-                        help="Save visualization plots")
+    parser.add_argument("--no_plots", action="store_true",
+                        help="Skip saving visualization plots")
     parser.add_argument("--output_dir", type=str, default=OUTPUT_DIR,
                         help="Output directory for plots")
 
@@ -173,7 +190,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_batch_experiment(df, args, output_dir):
+def run_batch_experiment(df, args, output_dir, metadata=None):#
     """
     Run all experimental conditions and generate outputs.
 
@@ -347,7 +364,7 @@ def run_batch_experiment(df, args, output_dir):
     print(f"Saved: all_quali_heatmap.png")
 
     # Generate per-condition recap heatmaps and composition plots
-    if args.save_plots:
+    if not args.no_plots:
         print(f"\nGenerating {len(results['cond_name'])} recap heatmaps...")
         for i, cond_name in enumerate(results['cond_name']):
             recap = results['cond_recap'][i].copy()
@@ -355,6 +372,23 @@ def run_batch_experiment(df, args, output_dir):
                 plot_cluster_recap_heatmap(recap, cond_name, output_dir)
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
+
+        # Per-condition cluster scatter plots (tsne/pca)
+        if args.projection != "none":
+            print(f"Generating cluster scatter plots...")
+            for i, cond_name in enumerate(results['cond_name']):
+                res_df = results['cond_res'][i]
+                labels = res_df['clusters'].values
+                feature_set = exp_condition['feature_set'][i]
+                if len(set(labels) - {-1}) > 1:
+                    cond_clean = re.sub(r'\s+', '', cond_name)
+                    X = res_df[feature_set].values.astype(float)
+                    X_2d = reduce_dimensions(X, method=args.projection)
+                    plot_clusters(X_2d, labels,
+                                  title=f"Clusters ({cond_name})",
+                                  out_path=f"{output_dir}/{cond_clean}_clusters.png")
+                    plt.close()
+            print(f"Saved: cluster scatter plots")
 
         # Composition bar plots per condition x sensitive attribute
         print(f"Generating composition plots...")
@@ -371,60 +405,86 @@ def run_batch_experiment(df, args, output_dir):
 
     # --- CSV outputs ---
 
-    # Summary CSV: one row per condition
+    # Global summary CSV: one row per condition, one primary assessment metric (KW p-value for error)
+    # Metadata columns prepended so the file is self-contained for analysis
     summary_rows = []
+    chi_res_lookup = chi_res.set_index('cond_name') if chi_res is not None else None
     for i, cond_name in enumerate(results['cond_name']):
         recap = results['cond_recap'][i]
-        summary_rows.append({
+        kw_p = chi_res_lookup.loc[cond_name, 'error'] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
+        row = {} if metadata is None else dict(metadata)
+        row.update({
             'cond_name': cond_name,
             'cond_descr': results['cond_descr'][i],
             'n_clusters': len(recap),
+            'kw_p_error': round(kw_p, 4) if not np.isnan(kw_p) else np.nan,
             'silhouette_avg': round(recap['silhouette'].mean(), 4) if 'silhouette' in recap.columns else np.nan,
             'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else np.nan,
             'error_mean_avg': round(recap['error_mean'].mean(), 4) if 'error_mean' in recap.columns else np.nan,
             'abs_error_mean_avg': round(recap['abs_error_mean'].mean(), 4) if 'abs_error_mean' in recap.columns else np.nan,
         })
+        summary_rows.append(row)
     summary_df = pd.DataFrame(summary_rows)
     summary_df.to_csv(f"{output_dir}/results_summary.csv", index=False)
     print(f"\nSaved: results_summary.csv")
 
-    # Per-condition recap CSVs
-    recap_dir = os.path.join(output_dir, "recap")
-    os.makedirs(recap_dir, exist_ok=True)
-    for i, cond_name in enumerate(results['cond_name']):
-        cond_clean = re.sub(r'\s+', '', cond_name)
-        results['cond_recap'][i].to_csv(f"{recap_dir}/{cond_clean}.csv", index=False)
-    print(f"Saved: {len(results['cond_name'])} recap CSVs in recap/")
-
-    # --- Separability tests (Mann-Whitney U / Kruskal-Wallis / Chi-squared) ---
-    sep_dir = os.path.join(output_dir, "separability")
-    os.makedirs(sep_dir, exist_ok=True)
+    # Per-condition result CSVs (individual level)
+    # One CSV per condition at root level:
+    #   - 1 row per cluster with a 'rule' (most distinctive sensitive feature)
+    #   - 1 OVERALL row with the KW stat test result
     all_cols_to_test = list(set(
         parse_column_list(args.regular_cols)
         + sensitive_cols
         + parse_column_list(args.special_cols)
     ))
-    print(f"\nRunning separability tests...")
+    print(f"\nSaving per-condition result CSVs...")
     for i, cond_name in enumerate(results['cond_name']):
+        cond_clean = re.sub(r'\s+', '', cond_name)
+        recap_i = results['cond_recap'][i].copy()
+
+        # Add rule: most distinctive sensitive feature per cluster (highest abs _diff)
+        diff_cols = [c for c in recap_i.columns if c.endswith('_diff')]
+        if diff_cols:
+            def _make_rule(row):
+                best_col = row[diff_cols].abs().idxmax()
+                best_val = row[best_col]
+                feature = best_col.replace('_diff', '')
+                direction = '+' if best_val > 0 else ''
+                return f"{feature} ({direction}{round(best_val, 3)})"
+            recap_i.insert(1, 'rule', recap_i.apply(_make_rule, axis=1))
+        else:
+            recap_i.insert(1, 'rule', '')
+
+        # Add OVERALL row with Kruskal-Wallis stat test
+        kw_p = chi_res_lookup.loc[cond_name, 'error'] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
+        overall_row = {col: '' for col in recap_i.columns}
+        overall_row['c'] = 'OVERALL'
+        overall_row['rule'] = f"kruskallwallis_p (error): {round(kw_p, 4) if not np.isnan(kw_p) else 'n/a'}"
+        recap_i = pd.concat([recap_i, pd.DataFrame([overall_row])], ignore_index=True)
+
+        # Append separability test results (feature-level stat tests across clusters)
         res_df = results['cond_res'][i]
         labels = res_df['clusters'].values
         if len(set(labels) - {-1}) > 1:
             sep_result = separability_check(res_df, labels, all_cols_to_test)
             if not sep_result.empty:
-                cond_clean = re.sub(r'\s+', '', cond_name)
-                sep_result.to_csv(f"{sep_dir}/{cond_clean}.csv")
-    print(f"Saved: separability tests in separability/")
+                for feat, sep_row in sep_result.iterrows():
+                    sep_entry = {col: '' for col in recap_i.columns}
+                    sep_entry['c'] = f'SEP:{feat}'
+                    sep_entry['rule'] = f"{sep_row.get('test', '')} p={round(sep_row.get('p_value', np.nan), 4)}"
+                    recap_i = pd.concat([recap_i, pd.DataFrame([sep_entry])], ignore_index=True)
+
+        recap_i.to_csv(f"{output_dir}/{cond_clean}.csv", index=False)
+    print(f"Saved: {len(results['cond_name'])} per-condition CSVs")
 
     print(f"\nAll outputs saved to: {output_dir}/")
-    print("  - exp_condition.csv")
-    print("  - chi_res.csv")
-    print("  - results_summary.csv")
-    print("  - recap/ (per-condition recap CSVs)")
-    print("  - separability/ (per-condition stat tests)")
-    print("  - chi_res_heatmap.png")
+    print("  - results_summary.csv (global: 1 row per condition, kw_p_error as key metric)")
+    print(f"  - {len(results['cond_name'])} per-condition CSVs (1 row per cluster + OVERALL stat test)")
+    print("  - chi_res.csv / chi_res_heatmap.png")
     print("  - all_quali_heatmap.png")
-    if args.save_plots:
-        print(f"  - {len(results['cond_name'])} recap heatmaps")
+    print("  - exp_condition.csv")
+    if not args.no_plots:
+        print(f"  - {len(results['cond_name'])} recap heatmaps + cluster scatter plots")
         print(f"  - composition plots")
 
     return results
@@ -458,7 +518,6 @@ def main():
     print(f"Loading data...")
     df = pd.read_csv(args.data_path)
 
-    # Auto-compute regression error from y_true/y_pred if needed
     if args.error_type == 'regression' and not args.error_col:
         if args.y_true_col and args.y_pred_col:
             df['_regression_error'] = df[args.y_true_col] - df[args.y_pred_col]
@@ -528,19 +587,17 @@ def main():
             return
 
         # Single-seed experiment mode
-        output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_s{args.seed}")
+        output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_{args.algorithm}_{args.distance}_s{args.seed}")
         os.makedirs(output_dir, exist_ok=True)
-        # Save metadata
-        metadata = pd.DataFrame([{
-            'seed': args.seed,
+        metadata = {
+            'dataset': dataset_name,
             'algorithm': args.algorithm,
             'distance': args.distance,
-            'dataset': dataset_name,
-            'timestamp': full_timestamp,
+            'seed': args.seed,
             'scoring_method': args.scoring,
-        }])
-        metadata.to_csv(os.path.join(output_dir, 'metadata.csv'), index=False)
-        run_batch_experiment(df, args, output_dir)
+            'timestamp': full_timestamp,
+        }
+        run_batch_experiment(df, args, output_dir, metadata=metadata)
         print("\nDone.")
         return
 
@@ -712,7 +769,7 @@ def main():
         print(f"\nSaved: recap/{run_name}.csv")
 
         # Save recap heatmap
-        if args.save_plots and len(recap) > 1:
+        if not args.no_plots and len(recap) > 1:
             plot_cluster_recap_heatmap(recap.copy(), run_name, output_dir)
             print(f"Saved: {run_name}.png")
 
@@ -735,7 +792,7 @@ def main():
         print("  Not enough clusters for separability analysis")
 
     # Visualization
-    if args.save_plots:
+    if not args.no_plots:
         print(f"\nGenerating visualizations ({args.projection})...")
 
         if args.projection != "none":
