@@ -133,7 +133,7 @@ def _find_best_k(
             clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X)
         elif algorithm == "kmedoids":
-            from sklearn_extra.cluster import KMedoids
+            
             clusterer = KMedoids(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X)
         elif algorithm == "kprototypes":
@@ -230,9 +230,7 @@ def cluster(
     else:
         feature_names = None
         X = features.copy()
-
-
-
+        
     # Compute mask for confusion matrix subset
     mask = None
     if subset is not None:

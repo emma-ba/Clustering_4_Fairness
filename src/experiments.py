@@ -81,6 +81,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   temp = data_result[['clusters']].copy()
   temp['count'] = 1
   recap = temp.groupby(['clusters'], as_index=False).sum()
+  recap = recap.set_index('clusters', drop=False)
 
   if error_type == 'regression':
     # Regression path: signed error stats (bias direction)
@@ -183,7 +184,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         sensitive_data[col]['p'].append(round(res.pvalue, 3))
 
   recap['diff_vs_rest'] = np.around(diff_vs_rest, 3)
-  recap['diff_p'] = diff_p
+  recap['mannwhitney_p'] = diff_p
 
   for col in sensitive_cols_expanded:
     recap[f'{col}_prop'] = np.around(sensitive_data[col]['prop'], 3)
@@ -201,6 +202,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   else:
     recap['error_rate'] = np.around(recap['error_rate'] , 3)
 
+  recap = recap.reset_index(drop=True)
   recap.rename(columns={'clusters':'c'}, inplace=True)
 
   return(recap)
@@ -346,7 +348,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
     chi_res['cond_name'].append(results['cond_name'][i])
     recap = results['cond_recap'][i]
 
-    if(len(recap['diff_p']) == 1):
+    if(len(recap['mannwhitney_p']) == 1):
       chi_res['error'].append(np.nan)
       for col in actual_sensitive:
         chi_res[col].append(np.nan)
@@ -430,7 +432,7 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None):
     feature_set = exp_condition['feature_set'][i]
     clusters = data['clusters']
     recap = results['cond_recap'][i]
-    if(len(recap['diff_p']) == 1):
+    if(len(recap['mannwhitney_p']) == 1):
       all_quali['silhouette'].append(np.nan)
       continue
     silhouette_indiv = silhouette_samples(data[feature_set], clusters)
