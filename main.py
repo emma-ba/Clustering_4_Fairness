@@ -159,7 +159,10 @@ def parse_args():
     # TODO: Improve descriptions of arguments in READMe so that they are more self-explanatory.
     # TODO: Look into journales that take research artifacts. Or a DEMO at a conference.
     # TODO: Look into finding hte number of clusters if it works or not. Should wokr
-    # TODO :
+    # TODO : Try clustering iteratively. 
+    # TODO: Try rescaling the data. 
+    # TODO: Try resampling the data, to keep the sample 50% errors, 50% non-errors. 
+    # TODO: 
     parser.add_argument("--sensitive_cols", type=str, default=None,
                         help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")                                                                                           
     parser.add_argument("--proxy_cols", type=str, default=None,                                                                                                                         
@@ -187,7 +190,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_batch_experiment(df, args, output_dir, metadata=None):
+def run_batch_experiment(df, args, output_dir, metadata=None):#
     """
     Run all experimental conditions and generate outputs.
 
