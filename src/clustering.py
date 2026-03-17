@@ -19,7 +19,6 @@ from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from kmodes.kprototypes import KPrototypes
 from sklearn_extra.cluster import KMedoids
 from .scoring import ScoringFn, silhouette_scorer
-from sklearn_extra.cluster import KMedoids 
 @dataclass
 class ClusteringResult:
     """Container for clustering results and evaluation metrics."""

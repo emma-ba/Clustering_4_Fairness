@@ -537,7 +537,6 @@ def main():
             os.makedirs(base_output_dir, exist_ok=True)
 
             all_chi_res = []
-            all_silhouettes = []
 
             for seed in seeds:
                 print(f"\n{'='*60}")
@@ -619,14 +618,13 @@ def main():
     }])
     metadata.to_csv(os.path.join(output_dir, 'metadata.csv'), index=False)
 
-    # Parse column lists
     regular_cols = parse_column_list(args.regular_cols)
     sensitive_cols = parse_column_list(args.sensitive_cols)
     proxy_cols = parse_column_list(args.proxy_cols)
     special_cols = parse_column_list(args.special_cols)                                                                                                                                                    
                                                                                                                                                                                         
-    # Build clustering features
-    clustering_cols = regular_cols + proxy_cols + special_cols
+    # Build clustering features 
+    clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols
     features = df[clustering_cols] if clustering_cols else df
 
     # Identify categorical columns (string-like or category dtype)
@@ -642,7 +640,7 @@ def main():
     # Get y_true/y_pred from DataFrame if subset is requested                                                                                                                           
     y_true, y_pred = None, None                                                                                                                                                         
     if args.subset:                                                                                                                                                                     
-        if args.y_true_col and args.y_pred_col:                                                                                                                                         
+        if args.y_true_col and args.y_pred_col:                                                                                                                             
             y_true = df[args.y_true_col].values                                                                                                                                         
             y_pred = df[args.y_pred_col].values                                                                                                                                         
         else:                                                                                                                                                                           

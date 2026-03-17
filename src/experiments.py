@@ -77,8 +77,9 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # ...with error rates
   res = data_result[['clusters', error_col]]
 
-  # ...with cluster size
+  # ...with cluster size (exclude noise cluster -1 from DBSCAN/HDBSCAN)
   temp = data_result[['clusters']].copy()
+  temp = temp[temp['clusters'] != -1]
   temp['count'] = 1
   recap = temp.groupby(['clusters'], as_index=False).sum()
   recap = recap.set_index('clusters', drop=False)
