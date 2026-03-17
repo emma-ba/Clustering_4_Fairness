@@ -70,6 +70,9 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   if sensitive_cols is None:
     sensitive_cols = []
 
+  # Exclude noise points (cluster label -1 from DBSCAN/HDBSCAN) before any computation
+  data_result = data_result[data_result['clusters'] != -1].copy()
+
   # Expand multi-class sensitive columns into binary indicators
   data_result, sensitive_cols_expanded = _expand_multiclass_cols(data_result, sensitive_cols)
 
@@ -77,9 +80,8 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # ...with error rates
   res = data_result[['clusters', error_col]]
 
-  # ...with cluster size (exclude noise cluster -1 from DBSCAN/HDBSCAN)
+  # ...with cluster size
   temp = data_result[['clusters']].copy()
-  temp = temp[temp['clusters'] != -1]
   temp['count'] = 1
   recap = temp.groupby(['clusters'], as_index=False).sum()
   recap = recap.set_index('clusters', drop=False)
