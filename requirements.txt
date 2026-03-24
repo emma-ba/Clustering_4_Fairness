@@ -1,6 +1,9 @@
 numpy
+pandas
+scipy
 matplotlib
+seaborn
 scikit-learn
 scikit-learn-extra
 hdbscan
-kmodes                                                                                                                                        
+kmodes
