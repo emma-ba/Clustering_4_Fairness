@@ -152,15 +152,12 @@ def parse_args():
     # TODO: Assess the feasibility of using the error as an input feature to the clustering or oversample the datapoints. e.g. SMOTE for binary features
     # TODO: Experiment with Health Data. Not a priority.
     # TODO: Parse crimes columns percentages by groups to make sense
-    # TODO: Create a new environment
     # TODO: Do the IQR for the student age, instead of having all ages. For numeric sensitive features, we have 2 columns, the iqr and the P-value.
-    # TODO: Improve descriptions of arguments in READMe so that they are more self-explanatory.
     # TODO: Look into journales that take research artifacts. Or a DEMO at a conference.
     # TODO: Look into finding hte number of clusters if it works or not. Should wokr
-    # TODO : Try clustering iteratively. 
-    # TODO: Try rescaling the data. 
-    # TODO: Try resampling the data, to keep the sample 50% errors, 50% non-errors. 
-    # TODO: 
+    # TODO : Try clustering iteratively.
+    # TODO: Try rescaling the data.
+    # TODO: Try resampling the data, to keep the sample 50% errors, 50% non-errors.
     parser.add_argument("--sensitive_cols", type=str, default=None,
                         help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")                                                                                           
     parser.add_argument("--proxy_cols", type=str, default=None,                                                                                                                         
@@ -172,6 +169,11 @@ def parse_args():
     parser.add_argument("--error_type", type=str, default="binary",
                         choices=["binary", "regression"],
                         help="Type of error column: 'binary' (classification 0/1) or 'regression' (continuous). Default: binary")
+    # NOTE: for ranking — we don't have model predictions yet, only raw ratings (e.g. ml1m).
+    # Do we pass a user-item pair or a per-user aggregate (e.g. NDCG@k per user)?
+    # And what's the error — rating rootm ena squared error or Normalized Discounted Cumulative Gain ? # 
+    # Do we train a model (I guess not)or do we just expect the user to bring predictions ?
+    
 
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
