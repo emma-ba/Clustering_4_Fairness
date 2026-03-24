@@ -2,7 +2,7 @@
 Visualization module for clustering and fairness analysis.
 
 Provides plotting functions for:
-- Cluster visualization in 2D (via UMAP or PCA)
+- Cluster visualization in 2D (via t-SNE or PCA)
 - Cluster composition by demographic attributes
 - Fairness metrics visualization
 """
@@ -11,10 +11,9 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-# UMAP disabled - use tsne or pca instead
-# import umap
 from typing import Optional, Literal, Union
 from .clustering import ClusteringResult
 
@@ -389,8 +388,6 @@ def plot_silhouette_heatmap(
     plt.Figure
         The matplotlib figure object.
     """
-    import seaborn as sns
-
     fig, ax = plt.subplots(figsize=figsize)
 
     # Use reversed colormap so higher=blue (better)
@@ -448,8 +445,6 @@ def plot_quality_metrics_heatmap(
     plt.Figure
         The matplotlib figure object.
     """
-    import seaborn as sns
-
     fig, axes = plt.subplots(1, 2, figsize=figsize,
                              gridspec_kw={'width_ratios': [4, 1]})
 

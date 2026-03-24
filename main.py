@@ -1,6 +1,9 @@
-import os, argparse, sys, re
+import os, argparse, re
 import numpy as np
 import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
 from src.clustering import cluster
 from src.scoring import (
     make_chi2_error_scorer,
@@ -146,16 +149,11 @@ def parse_args():
 
     parser.add_argument("--regular_cols", type=str, default=None,                                                                                                                       
                           help="Regular features for clustering (comma-separated column names)")              
-    # TODODONE: DHIGH PRIO. Statistical tests for numeric sensitive features. When 2 groups: Mann-Whitney. For more than 2 groups: Kruskal-Wallis.                                                                        
-    #TODODONE : Save results at the global level. 1 table for each exp condition, 1 assessment metric
-    # TODODONE - to review: Save results at individual level, have 1 set of results for each exp condition, where we have this in 1 csv, with 1 rule per cluste & 1vall stat test     
-    # TODODONE: Do a PCA for the result too for each exp condition. 
-    # TODOto review: Assess the feasibility of using the error as an input feature to the clustering or oversample the datapints. e.g. SMOTE for binary features
-    # TODODONE: prepare demo of how to use the code now for testing, and present to others in an easy way. Make a README showing how it works and go through it during the meeting.
-    # TODO: Experiment with Health Data. Not a priority. 
+    # TODO: Assess the feasibility of using the error as an input feature to the clustering or oversample the datapoints. e.g. SMOTE for binary features
+    # TODO: Experiment with Health Data. Not a priority.
     # TODO: Parse crimes columns percentages by groups to make sense
-    # TODO Create a new environment
-    # TODO: Do the IQR for the student age, instead of having all ages. For numeric snesitive features ,we have 2 columns, the iqr and the P-value. 
+    # TODO: Create a new environment
+    # TODO: Do the IQR for the student age, instead of having all ages. For numeric sensitive features, we have 2 columns, the iqr and the P-value.
     # TODO: Improve descriptions of arguments in READMe so that they are more self-explanatory.
     # TODO: Look into journales that take research artifacts. Or a DEMO at a conference.
     # TODO: Look into finding hte number of clusters if it works or not. Should wokr
@@ -281,8 +279,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                 error_type=args.error_type,
             )
 
-    # Parse feature weights
-    all_clustering_cols = regular_cols + special_cols
+    # Parse feature weights (include sensitive_cols — they are part of clustering)
+    all_clustering_cols = regular_cols + sensitive_cols + special_cols
     feature_weights = parse_feature_weights(
         args.feature_weights, regular_cols, sensitive_cols, special_cols, all_clustering_cols
     )
@@ -382,7 +380,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                 feature_set = exp_condition['feature_set'][i]
                 if len(set(labels) - {-1}) > 1:
                     cond_clean = re.sub(r'\s+', '', cond_name)
-                    X = res_df[feature_set].values.astype(float)
+                    from sklearn.preprocessing import StandardScaler
+                    X = StandardScaler().fit_transform(res_df[feature_set].values.astype(float))
                     X_2d = reduce_dimensions(X, method=args.projection)
                     plot_clusters(X_2d, labels,
                                   title=f"Clusters ({cond_name})",
@@ -757,7 +756,8 @@ def main():
         recap = make_recap(res_df, clustering_cols,
                            sensitive_cols=sensitive_cols,
                            error_col=args.error_col,
-                           error_type=args.error_type)
+                           error_type=args.error_type,
+                           feature_matrix=result.feature_matrix)
 
         # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")
@@ -773,7 +773,7 @@ def main():
 
     # Separability check (chi-squared for categorical, Kruskal-Wallis for numeric)
     df_for_sep = df if result.mask is None else df[result.mask]
-    all_cols_to_test = clustering_cols + sensitive_cols
+    all_cols_to_test = list(dict.fromkeys(clustering_cols + sensitive_cols))
     if result.n_clusters > 1:
         sep_results = separability_check(df_for_sep, result.labels, all_cols_to_test)
         if not sep_results.empty:

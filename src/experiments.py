@@ -15,7 +15,9 @@ import seaborn as sns
 import re
 from sklearn.metrics import silhouette_samples
 from scipy import stats
-from scipy.stats import chi2_contingency
+from scipy.stats import chi2_contingency, kruskal, mannwhitneyu
+from itertools import combinations
+from .clustering import cluster
 
 
 # =============================================================================
@@ -48,7 +50,7 @@ def _expand_multiclass_cols(data, sensitive_cols):
   return data, expanded_cols
 
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary'):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None):
   """
   Create recap of cluster info with error rates and sensitive feature proportions.
 
@@ -71,7 +73,10 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     sensitive_cols = []
 
   # Exclude noise points (cluster label -1 from DBSCAN/HDBSCAN) before any computation
-  data_result = data_result[data_result['clusters'] != -1].copy()
+  noise_mask = data_result['clusters'] != -1
+  data_result = data_result[noise_mask].copy()
+  if feature_matrix is not None:
+    feature_matrix = feature_matrix[noise_mask.values]
 
   # Expand multi-class sensitive columns into binary indicators
   data_result, sensitive_cols_expanded = _expand_multiclass_cols(data_result, sensitive_cols)
@@ -114,7 +119,10 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # Get individual silhouette scores
   clusters = data_result['clusters']
   if(len(recap['clusters'].unique()) > 1):
-    silhouette_val = silhouette_samples(data_result[feature_set], clusters)
+    # Use scaled feature_matrix if provided (matches the space clustering was done in)
+    # Otherwise fall back to raw feature columns (less accurate silhouette)
+    X_for_silhouette = feature_matrix if feature_matrix is not None else data_result[feature_set].values
+    silhouette_val = silhouette_samples(X_for_silhouette, clusters)
 
   for c in recap['clusters']:
     # Get in-cluster data
@@ -147,7 +155,6 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
       rest_errors = rest_data[error_col].values
       diff_vs_rest.append(round(c_errors.mean() - rest_errors.mean(), 6))
       try:
-        from scipy.stats import mannwhitneyu
         _, p = mannwhitneyu(c_errors, rest_errors, alternative='two-sided')
         diff_p.append(round(p, 3))
       except ValueError:
@@ -239,8 +246,6 @@ def separability_check(data, labels, columns):
         DataFrame with columns: test, statistic, p_value
         Index is column names.
     """
-    from scipy.stats import kruskal, mannwhitneyu
-
     results = {}
     unique_labels = [l for l in np.unique(labels) if l != -1]
 
@@ -360,7 +365,6 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
     # Test error differences
     if error_type == 'regression':
       # Kruskal-Wallis on raw continuous error values grouped by cluster
-      from scipy.stats import kruskal as kruskal_test
       res_df = results['cond_res'][i]
       cluster_labels = res_df['clusters'].values
       unique_clusters = sorted(set(cluster_labels) - {-1})
@@ -368,7 +372,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       groups = [g for g in groups if len(g) > 0]
       if len(groups) >= 2:
         try:
-          _, p = kruskal_test(*groups)
+          _, p = kruskal(*groups)
           chi_res['error'].append(round(p, 6))
         except ValueError:
           chi_res['error'].append(np.nan)
@@ -553,8 +557,6 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
   dict
       Results dictionary with keys: cond_name, cond_descr, cond_res, cond_recap
   """
-  from .clustering import cluster
-
   np.random.seed(seed)
 
   results = {'cond_name': [],
@@ -593,7 +595,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
 
     recap = make_recap(res_df, feature_set,
                        sensitive_cols=sensitive_cols, error_col=error_col,
-                       error_type=error_type)
+                       error_type=error_type,
+                       feature_matrix=result.feature_matrix)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])
@@ -626,8 +629,6 @@ def create_exp_conditions(groups):
   -------
   pd.DataFrame with columns: feature_set_descr, feature_set_name, feature_set
   """
-  from itertools import combinations
-
   group_names = list(groups.keys())
   n = len(group_names)
 
