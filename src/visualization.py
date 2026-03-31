@@ -294,7 +294,7 @@ def visualize_clustering_result(
     result: ClusteringResult,
     attribute: Optional[np.ndarray] = None,
     attribute_name: str = "Attribute",
-    reduction_method: Literal["umap", "pca", "tsne"] = "umap",
+    reduction_method: Literal["pca", "tsne"] = "tsne",
     output_dir: Optional[str] = None,
     prefix: str = "cluster",
 ) -> dict:

@@ -167,7 +167,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
 
       # ...with Poisson stat test
       # Deal with splits with 0 error
-      if((recap['n_error'][c] < 1) | (recap['count'][c] < 1) | (rest_n_error < 1) | (rest_count < 1)):
+      if (recap['n_error'][c] < 1) or (recap['count'][c] < 1) or (rest_n_error < 1) or (rest_count < 1):
         res = stats.poisson_means_test(recap['count'][c] - recap['n_error'][c], recap['count'][c], rest_count - rest_n_error, rest_count)
         diff_p.append(round(res.pvalue, 3))
       else:
@@ -186,7 +186,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
       sensitive_data[col]['diff'].append(c_prop - rest_prop)
 
       # Poisson means test (handle zero counts)
-      if((c_n < 1) | (c_count < 1) | (rest_n < 1) | (rest_count < 1)):
+      if (c_n < 1) or (c_count < 1) or (rest_n < 1) or (rest_count < 1):
         res = stats.poisson_means_test(c_count - c_n, c_count, rest_count - rest_n, rest_count)
         sensitive_data[col]['p'].append(round(res.pvalue, 3))
       else:
@@ -384,8 +384,11 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       test_data['count'] = test_data['count'] - test_data['n_error']
       test_data = test_data.rename(columns={"count": "n_correct"})
       test_data = test_data.transpose()
-      test_res = chi2_contingency(test_data)
-      chi_res['error'].append(round(test_res.pvalue, 6))
+      if (test_data.sum(axis=0) == 0).any() or (test_data.sum(axis=1) == 0).any():
+        chi_res['error'].append(np.nan)
+      else:
+        test_res = chi2_contingency(test_data)
+        chi_res['error'].append(round(test_res.pvalue, 6))
 
     # Test each sensitive column (binary: 2x2 table, multi-class indicators: 2xN each)
     for col in actual_sensitive:
@@ -396,8 +399,11 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       test_data['count'] = test_data['count'] - test_data[f'{col}_n']
       test_data = test_data.rename(columns={"count": f'not_{col}_n'})
       test_data = test_data.transpose()
-      test_res = chi2_contingency(test_data)
-      chi_res[col].append(round(test_res.pvalue, 6))
+      if (test_data.sum(axis=0) == 0).any() or (test_data.sum(axis=1) == 0).any():
+        chi_res[col].append(np.nan)
+      else:
+        test_res = chi2_contingency(test_data)
+        chi_res[col].append(round(test_res.pvalue, 6))
 
   return(pd.DataFrame(chi_res))
 

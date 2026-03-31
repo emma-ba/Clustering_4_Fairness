@@ -9,3 +9,4 @@ run_tests.sh
 clustering_results/
 __pycache__
 .DS_STORE
+notes/
