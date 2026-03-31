@@ -85,7 +85,6 @@ python main.py --data_path <path> [options]
 | `--output_dir` | Custom output directory. Default is `clustering_results/<date>/` |
 | `--experiment` | Run in experiment mode: automatically generates all combinations of feature groups (REG, SEN, ERR) and runs each as a separate condition, then produces a comparative summary |
 
-#TODO decile_score is leaking your ground truth, better to remove it.
 
 ---
 
@@ -108,7 +107,7 @@ Runs experiment mode across multiple seeds and aggregates results.
 ```bash
 python main.py \
   --data_path Data/Compas_error_shap.csv \
-  --regular_cols age,decile_score,priors_count \
+  --regular_cols age,priors_count \
   --sensitive_cols sex_Female,race_African-American,race_Caucasian \
   --error_col errors \
   --algorithm kmeans --n_clusters 5 --seed 42
@@ -117,7 +116,7 @@ python main.py \
 ```bash
 python main.py \
   --data_path Data/Compas_error_shap.csv \
-  --regular_cols age,decile_score,priors_count \
+  --regular_cols age,priors_count \
   --sensitive_cols sex_Female,race_African-American,race_Caucasian \
   --error_col errors \
   --algorithm kmeans --n_min 2 --n_max 6 --seed 42 \
@@ -127,7 +126,7 @@ python main.py \
 ```bash
 python main.py \
   --data_path Data/Compas_error_shap.csv \
-  --regular_cols age,decile_score,priors_count \
+  --regular_cols age,priors_count \
   --sensitive_cols sex_Female,race_African-American,race_Caucasian \
   --y_true_col true_class --y_pred_col predicted_class \
   --subset FP_FN \

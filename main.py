@@ -147,21 +147,29 @@ def parse_args():
                         choices=["pca", "tsne", "none"],
                         help="Projection method for visualization (use 'none' to skip)")
 
-    parser.add_argument("--regular_cols", type=str, default=None,                                                                                                                       
-                          help="Regular features for clustering (comma-separated column names)")              
+    parser.add_argument("--regular_cols", type=str, default=None, help="Regular features for clustering (comma-separated column names)")          
     # TODO: Assess the feasibility of using the error as an input feature to the clustering or oversample the datapoints. e.g. SMOTE for binary features
     # TODO: Experiment with Health Data. Not a priority.
-    # TODO: Parse crimes columns percentages by groups to make sense
+    # TODO: Parse crimes columns percentages by groups to make sense - not a priority 
     # TODO: Do the IQR for the student age, instead of having all ages. For numeric sensitive features, we have 2 columns, the iqr and the P-value.
     # TODO: Look into journales that take research artifacts. Or a DEMO at a conference.
     # TODO: Look into finding hte number of clusters if it works or not. Should wokr
-    # TODO : Try clustering iteratively.
-    # TODO: Try rescaling the data.
-    # TODO: Try resampling the data, to keep the sample 50% errors, 50% non-errors.
+    
+    # NOTE: On a besoin juste d'un datapoint pour le ndcg. Meme system que pour regression. 
+    
+    # TODO: Finalise binary class & regression, tester entre nous, etc.
+    # TODO: Remove decile_score_scaled & Shap_decile_score_scaled from compas dataset. 
+    # TODO: Package
+    # TODO: site web ou on peut uploader le dataset, confirmer les colommes a utilier, sensitives. Penser un peu aux tests qu'on peut applquer. 
+    # TODO: Publish: Look for open science journals - 1 v all
+    # TODO: Try clustering iteratively. 
+    # TODO: Multi-class
+    # TODO: On peut faire un clustering qui considere +ieurs formes d'erruer. Pour pb de ranking, on a P & Recall - pour + tard.
+    # TODO: ACM Badge
+    
     parser.add_argument("--sensitive_cols", type=str, default=None,
                         help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")                                                                                           
-    parser.add_argument("--proxy_cols", type=str, default=None,                                                                                                                         
-                        help="Proxy features for sensitive attributes (comma-separated column names)")                                                                                  
+    parser.add_argument("--proxy_cols", type=str, default=None, help="Proxy features for sensitive attributes (comma-separated column names)")                                                                                  
     parser.add_argument("--special_cols", type=str, default=None,
                           help="Special features like SHAP values (comma-separated column names)")
     parser.add_argument("--error_col", type=str, default=None,
@@ -169,10 +177,10 @@ def parse_args():
     parser.add_argument("--error_type", type=str, default="binary",
                         choices=["binary", "regression"],
                         help="Type of error column: 'binary' (classification 0/1) or 'regression' (continuous). Default: binary")
-    # NOTE: for ranking — we don't have model predictions yet, only raw ratings (e.g. ml1m).
-    # Do we pass a user-item pair or a per-user aggregate (e.g. NDCG@k per user)?
-    # And what's the error — rating rootm ena squared error or Normalized Discounted Cumulative Gain ? # 
-    # Do we train a model (I guess not)or do we just expect the user to bring predictions ?
+    
+    
+    
+    
     
 
     parser.add_argument("--data_path", type=str, required=True,
