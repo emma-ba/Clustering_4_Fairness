@@ -384,7 +384,8 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       test_data['count'] = test_data['count'] - test_data['n_error']
       test_data = test_data.rename(columns={"count": "n_correct"})
       test_data = test_data.transpose()
-      if (test_data.sum(axis=0) == 0).any() or (test_data.sum(axis=1) == 0).any():
+      
+      if (test_data.sum(axis=1) == 0).any():
         chi_res['error'].append(np.nan)
       else:
         test_res = chi2_contingency(test_data)
@@ -399,7 +400,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       test_data['count'] = test_data['count'] - test_data[f'{col}_n']
       test_data = test_data.rename(columns={"count": f'not_{col}_n'})
       test_data = test_data.transpose()
-      if (test_data.sum(axis=0) == 0).any() or (test_data.sum(axis=1) == 0).any():
+      if (test_data.sum(axis=1) == 0).any():
         chi_res[col].append(np.nan)
       else:
         test_res = chi2_contingency(test_data)
