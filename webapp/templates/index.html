@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C4F — Clustering for Fairness</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --blue-50:   #EFF6FF;
+  --blue-100:  #DBEAFE;
+  --blue-500:  #3B82F6;
+  --blue-600:  #2563EB;
+  --blue-700:  #1D4ED8;
+  --slate-50:  #F8FAFC;
+  --slate-100: #F1F5F9;
+  --slate-200: #E2E8F0;
+  --slate-300: #CBD5E1;
+  --slate-400: #94A3B8;
+  --slate-500: #64748B;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1E293B;
+  --slate-900: #0F172A;
+  --green-100: #DCFCE7;
+  --green-500: #22C55E;
+  --green-700: #15803D;
+  --red-100:   #FEE2E2;
+  --red-500:   #EF4444;
+  --red-700:   #B91C1C;
+  --amber-100: #FEF3C7;
+  --amber-700: #B45309;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
+  --shadow-md: 0 4px 8px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.05);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--slate-100);
+  color: var(--slate-800);
+  min-height: 100vh;
+}
+
+/* ── Header ── */
+.header {
+  background: var(--slate-900);
+  color: white;
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.header-icon { font-size: 1.6rem; }
+.header h1 { font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; }
+.header p  { font-size: .8rem; color: var(--slate-400); margin-top: 1px; }
+
+/* ── Stepper ── */
+.stepper {
+  background: white;
+  border-bottom: 1px solid var(--slate-200);
+  padding: 0 28px;
+  display: flex;
+}
+.step {
+  display: flex; align-items: center; gap: 9px;
+  padding: 14px 18px;
+  color: var(--slate-400);
+  font-size: .825rem; font-weight: 500;
+  border-bottom: 2px solid transparent;
+  cursor: default;
+  user-select: none;
+  transition: color .15s, border-color .15s;
+}
+.step.active   { color: var(--blue-600); border-bottom-color: var(--blue-600); }
+.step.done     { color: var(--slate-500); cursor: pointer; }
+.step.done:hover { color: var(--slate-700); }
+.step-num {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--slate-200); color: var(--slate-500);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .7rem; font-weight: 700; flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.step.active .step-num { background: var(--blue-600); color: white; }
+.step.done   .step-num { background: var(--green-500); color: white; }
+
+/* ── Layout ── */
+.container { max-width: 1060px; margin: 0 auto; padding: 24px 24px 48px; }
+
+/* ── Card ── */
+.card {
+  background: white; border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 24px; margin-bottom: 18px;
+}
+.card-title { font-size: .95rem; font-weight: 700; color: var(--slate-800); margin-bottom: 3px; }
+.card-desc  { font-size: .825rem; color: var(--slate-500); margin-bottom: 18px; }
+
+/* ── Upload zone ── */
+.upload-zone {
+  border: 2px dashed var(--slate-300); border-radius: var(--radius);
+  padding: 52px 24px; text-align: center; cursor: pointer;
+  transition: all .15s; color: var(--slate-500);
+}
+.upload-zone:hover, .upload-zone.drag { border-color: var(--blue-500); background: var(--blue-50); color: var(--blue-600); }
+.upload-zone .uicon { font-size: 2.8rem; margin-bottom: 10px; }
+.upload-zone h3 { font-size: .95rem; font-weight: 600; margin-bottom: 3px; }
+.upload-zone p  { font-size: .8rem; }
+
+/* ── File info banner ── */
+.file-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; margin-top: 14px;
+  background: var(--blue-50); border: 1px solid var(--blue-100); border-radius: 7px;
+}
+.file-banner .fname { font-weight: 600; font-size: .875rem; color: var(--slate-800); }
+.file-banner .fmeta { font-size: .75rem; color: var(--slate-500); }
+
+/* ── Preview table ── */
+.preview-wrap { margin-top: 16px; }
+.preview-label { font-size: .8rem; font-weight: 600; color: var(--slate-500); margin-bottom: 6px; }
+.scroll-box {
+  overflow-x: auto; overflow-y: auto;
+  max-height: 200px; border: 1px solid var(--slate-200); border-radius: 6px;
+}
+.preview-tbl { width: 100%; border-collapse: collapse; font-size: .78rem; }
+.preview-tbl th {
+  padding: 7px 10px; text-align: left; font-weight: 600;
+  color: var(--slate-600); background: var(--slate-50);
+  border-bottom: 1px solid var(--slate-200);
+  white-space: nowrap; position: sticky; top: 0;
+}
+.preview-tbl td {
+  padding: 6px 10px; border-bottom: 1px solid var(--slate-100); white-space: nowrap;
+}
+
+/* ── Column assignment table ── */
+.col-tbl { width: 100%; border-collapse: collapse; font-size: .825rem; }
+.col-tbl th {
+  padding: 9px 11px; text-align: left; font-weight: 600;
+  color: var(--slate-600); border-bottom: 1px solid var(--slate-200);
+  background: var(--slate-50); white-space: nowrap;
+}
+.col-tbl td { padding: 9px 11px; border-bottom: 1px solid var(--slate-100); vertical-align: middle; }
+.col-tbl tr:last-child td { border-bottom: none; }
+.col-tbl tr:hover td { background: var(--slate-50); }
+
+.badge {
+  display: inline-block; padding: 2px 7px; border-radius: 999px;
+  font-size: .72rem; font-weight: 600;
+}
+.badge-num  { background: #DBEAFE; color: #1D4ED8; }
+.badge-cat  { background: #D1FAE5; color: #065F46; }
+.badge-bool { background: #FEF3C7; color: #92400E; }
+
+select.role-sel {
+  padding: 4px 8px; border: 1px solid var(--slate-300); border-radius: 5px;
+  background: white; font-size: .8rem; color: var(--slate-800); cursor: pointer;
+}
+select.role-sel:focus { outline: none; border-color: var(--blue-500); }
+
+/* role colour hints */
+select.role-sel[data-role="regular"]   { border-left: 3px solid #3B82F6; }
+select.role-sel[data-role="sensitive"] { border-left: 3px solid #8B5CF6; }
+select.role-sel[data-role="error"]     { border-left: 3px solid #EF4444; }
+select.role-sel[data-role="special"]  { border-left: 3px solid #F59E0B; }
+select.role-sel[data-role="ignore"]   { border-left: 3px solid var(--slate-300); }
+
+/* ── Params form ── */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media(max-width:600px){ .form-grid { grid-template-columns: 1fr; } }
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label { font-size: .78rem; font-weight: 600; color: var(--slate-600); }
+.form-group select,
+.form-group input[type="number"],
+.form-group input[type="text"] {
+  padding: 7px 9px; border: 1px solid var(--slate-300); border-radius: 6px;
+  font-size: .84rem; background: white; color: var(--slate-800);
+}
+.form-group select:focus,
+.form-group input:focus { outline: none; border-color: var(--blue-500); box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.form-group small { color: var(--slate-400); font-size: .72rem; }
+details summary {
+  cursor: pointer; font-size: .825rem; font-weight: 600;
+  color: var(--slate-500); padding: 10px 0; list-style: none;
+}
+details summary::before { content: '▸ '; }
+details[open] summary::before { content: '▾ '; }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 18px; border: none; border-radius: 6px;
+  font-size: .84rem; font-weight: 600; cursor: pointer; transition: all .15s;
+}
+.btn-primary   { background: var(--blue-600); color: white; }
+.btn-primary:hover { background: var(--blue-700); }
+.btn-primary:disabled { background: var(--slate-300); color: var(--slate-500); cursor: not-allowed; }
+.btn-ghost { background: white; color: var(--slate-600); border: 1px solid var(--slate-300); }
+.btn-ghost:hover { background: var(--slate-50); }
+.btn-lg { padding: 12px 28px; font-size: .95rem; }
+.actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+
+/* ── Status badge ── */
+.status-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 11px; border-radius: 999px; font-size: .75rem; font-weight: 600;
+}
+.status-badge.running { background: var(--amber-100); color: var(--amber-700); }
+.status-badge.done    { background: var(--green-100); color: var(--green-700); }
+.status-badge.error   { background: var(--red-100);   color: var(--red-700); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+.dot.pulse { animation: pulse 1.4s infinite; }
+
+/* ── Terminal log ── */
+.log-panel { background: #0D1117; border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
+.log-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;
+}
+.log-header h3 { color: #e2e8f0; font-size: .82rem; font-weight: 600; display:flex;align-items:center;gap:7px; }
+.log-body {
+  font-family: 'Menlo','Monaco','Courier New',monospace;
+  font-size: .78rem; color: #86EFAC; line-height: 1.55;
+  height: 260px; overflow-y: auto;
+}
+.log-body .ll { padding: 1px 0; }
+.log-body .le { color: #FCA5A5; }
+.log-body .li { color: #93C5FD; }
+
+/* ── Results ── */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; margin-bottom: 22px; }
+.stat-card {
+  background: var(--slate-50); border: 1px solid var(--slate-200);
+  border-radius: var(--radius); padding: 16px; text-align: center;
+}
+.stat-card .sv { font-size: 1.9rem; font-weight: 700; color: var(--blue-600); line-height: 1; margin-bottom: 4px; }
+.stat-card .sl { font-size: .72rem; color: var(--slate-500); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
+
+.section-title {
+  font-size: .9rem; font-weight: 700; color: var(--slate-800);
+  margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--slate-200);
+}
+
+/* Images grid */
+.img-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.img-card { border: 1px solid var(--slate-200); border-radius: var(--radius); overflow: hidden; background: white; }
+.img-card-title {
+  padding: 10px 14px; font-size: .8rem; font-weight: 600;
+  color: var(--slate-600); border-bottom: 1px solid var(--slate-100); background: var(--slate-50);
+}
+.img-card img { width: 100%; display: block; }
+
+/* Results tables */
+.res-tbl { width: 100%; border-collapse: collapse; font-size: .78rem; }
+.res-tbl th {
+  padding: 7px 9px; text-align: left; font-weight: 600;
+  color: var(--slate-600); background: var(--slate-50);
+  border-bottom: 2px solid var(--slate-200); white-space: nowrap;
+}
+.res-tbl td { padding: 7px 9px; border-bottom: 1px solid var(--slate-100); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.res-tbl tr:hover td { background: var(--slate-50); }
+.cell-sig-pos { background: #FEE2E2; color: #991B1B; font-weight: 600; }
+.cell-sig-neg { background: #DCFCE7; color: #166534; }
+
+/* Conditions accordion */
+.cond-list { display: flex; flex-direction: column; gap: 8px; }
+.cond-item { border: 1px solid var(--slate-200); border-radius: var(--radius); overflow: hidden; }
+.cond-header {
+  padding: 11px 15px; display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; background: var(--slate-50);
+  font-size: .84rem; font-weight: 600; color: var(--slate-700);
+}
+.cond-header:hover { background: var(--slate-100); }
+.cond-body { display: none; padding: 16px; }
+.cond-item.open .cond-body { display: block; }
+.cond-arrow { transition: transform .2s; font-size: .7rem; color: var(--slate-400); }
+.cond-item.open .cond-arrow { transform: rotate(180deg); }
+
+/* ── Misc ── */
+.hidden { display: none !important; }
+.sep { height: 1px; background: var(--slate-200); margin: 18px 0; }
+.hint-bar {
+  margin-top: 14px; padding: 10px 14px;
+  background: var(--slate-50); border-radius: 6px; border: 1px solid var(--slate-200);
+  font-size: .78rem; color: var(--slate-600); line-height: 1.5;
+}
+.hint-bar strong { color: var(--slate-700); }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════ HEADER ═══════════════════════════ -->
+<header class="header">
+  <span class="header-icon">🔬</span>
+  <div>
+    <h1>C4F — Clustering for Fairness</h1>
+    <p>Cluster ML model outputs and analyse prediction-error disparities across demographic groups</p>
+  </div>
+</header>
+
+<!-- ═══════════════════════════ STEPPER ═══════════════════════════ -->
+<nav class="stepper">
+  <div class="step active" data-s="1"><div class="step-num">1</div><span>Upload</span></div>
+  <div class="step"        data-s="2"><div class="step-num">2</div><span>Configure columns</span></div>
+  <div class="step"        data-s="3"><div class="step-num">3</div><span>Parameters</span></div>
+  <div class="step"        data-s="4"><div class="step-num">4</div><span>Run &amp; Results</span></div>
+</nav>
+
+<!-- ═══════════════════════════ CONTENT ═══════════════════════════ -->
+<main class="container">
+
+  <!-- ─── Step 1: Upload ─── -->
+  <div id="s1" class="step-pane">
+    <div class="card">
+      <div class="card-title">Upload your dataset</div>
+      <div class="card-desc">A CSV file containing your model predictions, features, and error column.</div>
+
+      <div class="upload-zone" id="drop-zone">
+        <div class="uicon">📂</div>
+        <h3>Drop a CSV file here</h3>
+        <p>or click to browse</p>
+        <input type="file" id="file-inp" accept=".csv" style="display:none">
+      </div>
+
+      <div id="file-banner" class="file-banner hidden">
+        <span style="font-size:1.4rem">📄</span>
+        <div>
+          <div class="fname" id="fname"></div>
+          <div class="fmeta" id="fmeta"></div>
+        </div>
+        <button class="btn btn-ghost" style="margin-left:auto;font-size:.78rem;padding:5px 12px" onclick="resetFile()">Change</button>
+      </div>
+
+      <div id="preview-wrap" class="preview-wrap hidden">
+        <div class="preview-label">Preview — first 5 rows</div>
+        <div class="scroll-box"><table class="preview-tbl" id="preview-tbl"></table></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="btn-s1" disabled onclick="goTo(2)">Next: Configure columns →</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 2: Columns ─── -->
+  <div id="s2" class="step-pane hidden">
+    <div class="card">
+      <div class="card-title">Assign column roles</div>
+      <div class="card-desc">Tell C4F how each column should be used. You need at least one feature column and an error column.</div>
+      <div class="scroll-box" style="max-height:none">
+        <table class="col-tbl">
+          <thead><tr><th>Column</th><th>Type</th><th>Unique</th><th>Sample values</th><th>Role</th></tr></thead>
+          <tbody id="col-tbody"></tbody>
+        </table>
+      </div>
+      <div class="hint-bar">
+        <strong>Regular</strong> — numeric features for clustering &nbsp;·&nbsp;
+        <strong>Sensitive</strong> — demographic attributes to track &nbsp;·&nbsp;
+        <strong>Error</strong> — prediction error column (0/1 or continuous) &nbsp;·&nbsp;
+        <strong>Special</strong> — derived features like SHAP values &nbsp;·&nbsp;
+        <strong>Ignore</strong> — excluded from analysis
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-ghost" onclick="goTo(1)">← Back</button>
+      <button class="btn btn-primary" onclick="goTo(3)">Next: Parameters →</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 3: Parameters ─── -->
+  <div id="s3" class="step-pane hidden">
+    <div class="card">
+      <div class="card-title">Algorithm &amp; Parameters</div>
+      <div class="card-desc">Configure the clustering algorithm, error type, and run mode.</div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Algorithm</label>
+          <select id="p-algo">
+            <option value="hdbscan">HDBSCAN (recommended)</option>
+            <option value="kmeans">K-Means</option>
+            <option value="bisectingkmeans">Bisecting K-Means</option>
+            <option value="kmedoids">K-Medoids</option>
+            <option value="dbscan">DBSCAN</option>
+            <option value="kprototypes">K-Prototypes</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Distance metric</label>
+          <select id="p-dist">
+            <option value="euclidean">Euclidean</option>
+            <option value="manhattan">Manhattan</option>
+            <option value="gower">Gower</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Error type</label>
+          <select id="p-errtype">
+            <option value="binary">Binary — classification (0 / 1)</option>
+            <option value="regression">Regression — continuous</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Run mode</label>
+          <select id="p-mode">
+            <option value="single">Single run</option>
+            <option value="experiment">Experiment — all feature-group combinations</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Number of clusters (k)</label>
+          <input type="number" id="p-k" value="5" min="2" max="100">
+          <small>Ignored if you set a k range below</small>
+        </div>
+
+        <div class="form-group">
+          <label>Scoring for k-selection</label>
+          <select id="p-scoring">
+            <option value="silhouette">Silhouette</option>
+            <option value="chi2_error">Chi² error separation</option>
+            <option value="chi2_sensitive">Chi² sensitive attribute</option>
+            <option value="composite">Composite (weighted)</option>
+          </select>
+        </div>
+      </div>
+
+      <details style="margin-top:18px">
+        <summary>Advanced options</summary>
+        <div class="form-grid" style="margin-top:12px">
+          <div class="form-group">
+            <label>k min (range search)</label>
+            <input type="number" id="p-kmin" placeholder="e.g. 2" min="2">
+            <small>Overrides fixed k above when set</small>
+          </div>
+          <div class="form-group">
+            <label>k max (range search)</label>
+            <input type="number" id="p-kmax" placeholder="e.g. 10" min="2">
+          </div>
+          <div class="form-group">
+            <label>HDBSCAN — min cluster size</label>
+            <input type="number" id="p-mcs" value="15" min="2">
+          </div>
+          <div class="form-group">
+            <label>HDBSCAN — min samples</label>
+            <input type="number" id="p-ms" value="5" min="1">
+          </div>
+          <div class="form-group">
+            <label>DBSCAN — epsilon</label>
+            <input type="number" id="p-eps" value="0.5" step="0.05" min="0">
+          </div>
+          <div class="form-group">
+            <label>Min datapoints per cluster</label>
+            <input type="number" id="p-mdp" placeholder="None">
+          </div>
+          <div class="form-group">
+            <label>Max iterations (KMeans)</label>
+            <input type="number" id="p-maxiter" value="300" min="1">
+          </div>
+          <div class="form-group">
+            <label>Random seed</label>
+            <input type="number" id="p-seed" value="42">
+          </div>
+          <div class="form-group">
+            <label>Projection for scatter plot</label>
+            <select id="p-proj">
+              <option value="tsne">t-SNE</option>
+              <option value="pca">PCA</option>
+              <option value="none">None (skip)</option>
+            </select>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-ghost" onclick="goTo(2)">← Back</button>
+      <button class="btn btn-primary btn-lg" onclick="runAnalysis()">▶ Run Analysis</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 4: Run & Results ─── -->
+  <div id="s4" class="step-pane hidden">
+
+    <!-- status bar -->
+    <div class="card" id="status-card" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <div>
+        <div class="card-title" id="st-title">Running analysis…</div>
+        <div class="card-desc" id="st-desc" style="margin-bottom:0">This may take a moment depending on your dataset size.</div>
+      </div>
+      <span class="status-badge running" id="st-badge"><span class="dot pulse"></span> Running</span>
+    </div>
+
+    <!-- log terminal -->
+    <div class="log-panel">
+      <div class="log-header">
+        <h3>⌨ Console output</h3>
+        <button class="btn btn-ghost" style="font-size:.72rem;padding:3px 10px;color:#94a3b8;background:transparent;border-color:#334155" onclick="clearLog()">Clear</button>
+      </div>
+      <div class="log-body" id="log-body"></div>
+    </div>
+
+    <!-- results (injected by JS) -->
+    <div id="results" class="hidden"></div>
+
+    <div class="actions">
+      <button class="btn btn-ghost" onclick="goTo(3)">← Back to parameters</button>
+      <button class="btn btn-primary hidden" id="btn-rerun" onclick="runAnalysis()">↻ Re-run</button>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════════════════ JS ═══════════════════════════ -->
+<script>
+// ─────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────
+const S = { step: 1, jobId: null, cols: [], es: null };
+
+// ─────────────────────────────────────────────────────────────
+// Stepper
+// ─────────────────────────────────────────────────────────────
+function goTo(n) {
+  if (n <= 0 || n > 4) return;
+  if (n >= 2 && !S.jobId) return;
+  if (n === 4) return;  // only reachable via runAnalysis()
+
+  S.step = n;
+  document.querySelectorAll('.step-pane').forEach(el => el.classList.add('hidden'));
+  document.getElementById('s' + n).classList.remove('hidden');
+
+  document.querySelectorAll('.step').forEach(el => {
+    const sn = +el.dataset.s;
+    el.classList.remove('active', 'done');
+    if (sn === n) el.classList.add('active');
+    else if (sn < n) el.classList.add('done');
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Upload
+// ─────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const fileInp  = document.getElementById('file-inp');
+
+dropZone.addEventListener('click', () => fileInp.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag'); handleFile(e.dataTransfer.files[0]); });
+fileInp.addEventListener('change', () => handleFile(fileInp.files[0]));
+
+function handleFile(file) {
+  if (!file || !file.name.toLowerCase().endsWith('.csv')) {
+    alert('Please upload a CSV file.');
+    return;
+  }
+  dropZone.innerHTML = '<div class="uicon">⏳</div><h3>Uploading…</h3><p>Please wait</p>';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  fetch('/api/upload', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { alert('Upload error: ' + d.error); resetDropZone(); return; }
+      S.jobId = d.job_id;
+      S.cols  = d.columns;
+
+      dropZone.classList.add('hidden');
+      const banner = document.getElementById('file-banner');
+      banner.classList.remove('hidden');
+      document.getElementById('fname').textContent = file.name;
+      document.getElementById('fmeta').textContent =
+        `${d.n_rows.toLocaleString()} rows × ${d.n_cols} columns`;
+
+      renderPreview(d.preview, d.columns.map(c => c.name));
+      document.getElementById('preview-wrap').classList.remove('hidden');
+      document.getElementById('btn-s1').disabled = false;
+      buildColTable(d.columns);
+    })
+    .catch(e => { alert('Upload failed: ' + e.message); resetDropZone(); });
+}
+
+function resetFile() {
+  S.jobId = null; S.cols = [];
+  dropZone.classList.remove('hidden'); resetDropZone();
+  document.getElementById('file-banner').classList.add('hidden');
+  document.getElementById('preview-wrap').classList.add('hidden');
+  document.getElementById('btn-s1').disabled = true;
+  fileInp.value = '';
+}
+
+function resetDropZone() {
+  dropZone.innerHTML = `
+    <div class="uicon">📂</div>
+    <h3>Drop a CSV file here</h3>
+    <p>or click to browse</p>
+    <input type="file" id="file-inp" accept=".csv" style="display:none">
+  `;
+  document.getElementById('file-inp').addEventListener('change', () => handleFile(fileInp.files[0]));
+}
+
+function renderPreview(rows, cols) {
+  const tbl = document.getElementById('preview-tbl');
+  tbl.innerHTML =
+    `<thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>` +
+    `<tbody>${rows.map(r =>
+      `<tr>${cols.map(c => `<td>${esc(r[c] != null ? r[c] : '')}</td>`).join('')}</tr>`
+    ).join('')}</tbody>`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Column assignment
+// ─────────────────────────────────────────────────────────────
+const ROLES = [
+  { v: 'ignore',    l: 'Ignore' },
+  { v: 'regular',   l: 'Regular feature' },
+  { v: 'sensitive', l: 'Sensitive feature' },
+  { v: 'error',     l: 'Error column' },
+  { v: 'special',   l: 'Special feature' },
+];
+
+function guessRole(col) {
+  const n = col.name.toLowerCase();
+  if (n === 'errors' || n === 'error' || n === 'err' || n.startsWith('error_')) return 'error';
+  if (['age','gender','sex','race','ethnicity','income','marital'].some(k => n.includes(k))) return 'sensitive';
+  if (n.includes('shap') || n.includes('shapley')) return 'special';
+  if (col.dtype.startsWith('float') || col.dtype.startsWith('int')) return 'regular';
+  return 'ignore';
+}
+
+function dtypeBadge(dtype) {
+  if (dtype.startsWith('float') || dtype.startsWith('int')) return `<span class="badge badge-num">${esc(dtype)}</span>`;
+  if (dtype === 'bool') return `<span class="badge badge-bool">${esc(dtype)}</span>`;
+  return `<span class="badge badge-cat">${esc(dtype)}</span>`;
+}
+
+function buildColTable(columns) {
+  const tbody = document.getElementById('col-tbody');
+  tbody.innerHTML = columns.map(col => {
+    const role = guessRole(col);
+    const opts = ROLES.map(r =>
+      `<option value="${r.v}"${r.v === role ? ' selected' : ''}>${r.l}</option>`
+    ).join('');
+    return `<tr>
+      <td><strong>${esc(col.name)}</strong></td>
+      <td>${dtypeBadge(col.dtype)}</td>
+      <td>${col.n_unique}</td>
+      <td style="font-family:monospace;font-size:.74rem;color:var(--slate-500)">${esc(col.sample.slice(0,3).join(', '))}</td>
+      <td>
+        <select class="role-sel" data-col="${esc(col.name)}" data-role="${role}"
+                onchange="this.dataset.role=this.value">
+          ${opts}
+        </select>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function getColsByRole() {
+  const out = { regular: [], sensitive: [], error: null, special: [] };
+  document.querySelectorAll('.role-sel').forEach(s => {
+    const c = s.dataset.col, r = s.value;
+    if (r === 'error') out.error = c;
+    else if (r === 'regular')   out.regular.push(c);
+    else if (r === 'sensitive') out.sensitive.push(c);
+    else if (r === 'special')   out.special.push(c);
+  });
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Run analysis
+// ─────────────────────────────────────────────────────────────
+function runAnalysis() {
+  const cols = getColsByRole();
+  if (!cols.error) {
+    alert('Please assign an error column on the "Configure columns" step.');
+    goTo(2); return;
+  }
+  if ([...cols.regular, ...cols.sensitive, ...cols.special].length === 0) {
+    alert('Please assign at least one feature column (Regular, Sensitive, or Special).');
+    goTo(2); return;
+  }
+
+  const kmin = intVal('p-kmin'), kmax = intVal('p-kmax');
+  const params = {
+    regular_cols:   cols.regular,
+    sensitive_cols: cols.sensitive,
+    special_cols:   cols.special,
+    error_col:      cols.error,
+    error_type:     val('p-errtype'),
+    algorithm:      val('p-algo'),
+    distance:       val('p-dist'),
+    n_clusters:     (kmin || kmax) ? null : (intVal('p-k') || 5),
+    n_min:          kmin,
+    n_max:          kmax,
+    scoring:        val('p-scoring'),
+    min_cluster_size: intVal('p-mcs') || 15,
+    min_samples:    intVal('p-ms')  || 5,
+    eps:            floatVal('p-eps') || 0.5,
+    max_iter:       intVal('p-maxiter') || 300,
+    seed:           intVal('p-seed') ?? 42,
+    min_datapoints: intVal('p-mdp') || null,
+    experiment:     val('p-mode') === 'experiment',
+    projection:     val('p-proj'),
+  };
+
+  // Switch to step 4
+  S.step = 4;
+  document.querySelectorAll('.step-pane').forEach(el => el.classList.add('hidden'));
+  document.getElementById('s4').classList.remove('hidden');
+  document.querySelectorAll('.step').forEach(el => {
+    const sn = +el.dataset.s;
+    el.classList.remove('active', 'done');
+    if (sn === 4) el.classList.add('active');
+    else el.classList.add('done');
+  });
+
+  clearLog();
+  document.getElementById('results').classList.add('hidden');
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('btn-rerun').classList.add('hidden');
+  setStatus('running', 'Running analysis…', 'This may take a moment depending on dataset size.');
+
+  if (S.es) { S.es.close(); S.es = null; }
+
+  fetch('/api/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_id: S.jobId, params }),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.error) { setStatus('error', 'Failed to start', d.error); return; }
+    S.es = new EventSource(`/api/stream/${S.jobId}`);
+    S.es.onmessage = onSSE;
+    S.es.onerror   = () => log('Connection lost.', 'e');
+  })
+  .catch(e => setStatus('error', 'Request failed', e.message));
+}
+
+function onSSE(ev) {
+  const m = JSON.parse(ev.data);
+  if (m.type === 'log')       { log(m.text); }
+  else if (m.type === 'heartbeat') { /* ignore */ }
+  else if (m.type === 'error') {
+    log('ERROR: ' + m.text, 'e');
+    if (m.traceback) m.traceback.split('\n').forEach(l => log(l, 'e'));
+    setStatus('error', 'Analysis failed', m.text);
+    document.getElementById('btn-rerun').classList.remove('hidden');
+    S.es.close();
+  }
+  else if (m.type === 'done') {
+    setStatus('done', 'Analysis complete', 'Results are displayed below.');
+    document.getElementById('btn-rerun').classList.remove('hidden');
+    renderResults(m.results);
+    S.es.close();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Log
+// ─────────────────────────────────────────────────────────────
+function log(text, cls = '') {
+  const el = document.getElementById('log-body');
+  const d  = document.createElement('div');
+  d.className = 'll' + (cls ? ' l' + cls : '');
+  d.textContent = '› ' + text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+}
+function clearLog() { document.getElementById('log-body').innerHTML = ''; }
+
+// ─────────────────────────────────────────────────────────────
+// Status
+// ─────────────────────────────────────────────────────────────
+function setStatus(type, title, desc) {
+  document.getElementById('st-title').textContent = title;
+  document.getElementById('st-desc').textContent  = desc;
+  const b = document.getElementById('st-badge');
+  b.className = 'status-badge ' + type;
+  const pulse = type === 'running' ? ' pulse' : '';
+  const label = { running: 'Running', done: 'Done', error: 'Error' }[type] || type;
+  b.innerHTML = `<span class="dot${pulse}"></span> ${label}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Results
+// ─────────────────────────────────────────────────────────────
+function renderResults(res) {
+  const el = document.getElementById('results');
+  el.classList.remove('hidden');
+  el.innerHTML = res.mode === 'single'
+    ? renderSingle(res)
+    : renderExperiment(res);
+}
+
+function renderSingle(r) {
+  let h = '';
+
+  // Stats
+  let stats = `
+    <div class="stat-card"><div class="sv">${r.n_clusters}</div><div class="sl">Clusters</div></div>
+    <div class="stat-card"><div class="sv">${r.n_noise}</div><div class="sl">Noise points</div></div>`;
+  if (r.silhouette != null)
+    stats += `<div class="stat-card"><div class="sv">${r.silhouette.toFixed(3)}</div><div class="sl">Avg silhouette</div></div>`;
+
+  h += `<div class="card"><div class="section-title">Summary</div><div class="stats-grid">${stats}</div></div>`;
+
+  // Recap table
+  if (r.recap && r.recap.length) {
+    h += `<div class="card"><div class="section-title">Cluster recap</div>
+      <div class="scroll-box">${makeTable(r.recap, true)}</div></div>`;
+  }
+
+  // Images
+  const imgs = [];
+  if (r.recap_image) imgs.push({ title: 'Recap heatmap', src: r.recap_image });
+  if (r.images?.scatter) imgs.push({ title: 'Cluster scatter', src: r.images.scatter });
+  Object.entries(r.images || {}).forEach(([k, v]) => {
+    if (k.startsWith('composition_'))
+      imgs.push({ title: 'Composition: ' + k.replace('composition_', ''), src: v });
+  });
+  if (imgs.length)
+    h += `<div class="card"><div class="section-title">Visualisations</div>
+      <div class="img-grid">${imgs.map(i => imgCard(i.title, i.src)).join('')}</div></div>`;
+
+  return h;
+}
+
+function renderExperiment(r) {
+  let h = '';
+
+  // Overview heatmaps
+  const ovImgs = [];
+  if (r.images?.chi_heatmap)   ovImgs.push({ title: 'Statistical test p-values',  src: r.images.chi_heatmap });
+  if (r.images?.quali_heatmap) ovImgs.push({ title: 'Quality metrics overview', src: r.images.quali_heatmap });
+  if (ovImgs.length)
+    h += `<div class="card"><div class="section-title">Overview heatmaps</div>
+      <div class="img-grid">${ovImgs.map(i => imgCard(i.title, i.src)).join('')}</div></div>`;
+
+  // Stats table
+  if (r.chi_res?.length) {
+    h += `<div class="card"><div class="section-title">Statistical test results (p-values)</div>
+      <div class="scroll-box">${makePvalTable(r.chi_res)}</div></div>`;
+  }
+
+  // Per-condition accordion
+  if (r.conditions?.length) {
+    const recapMap = {};
+    (r.recap_images || []).forEach(ri => recapMap[ri.cond_name] = ri.image);
+
+    const items = r.conditions.map((cond, i) => {
+      const img = recapMap[cond.name]
+        ? `<div class="img-card" style="margin-bottom:14px">${imgCard('Recap heatmap', recapMap[cond.name])}</div>`
+        : '';
+      const tbl = cond.recap?.length
+        ? `<div class="scroll-box">${makeTable(cond.recap, true)}</div>`
+        : `<p style="color:var(--slate-400);font-size:.82rem">Single cluster — no comparison available.</p>`;
+      return `
+        <div class="cond-item" id="ci${i}">
+          <div class="cond-header" onclick="toggleCond(${i})">
+            <span>${esc(cond.name)}</span>
+            <span class="cond-arrow">▾</span>
+          </div>
+          <div class="cond-body">${img}${tbl}</div>
+        </div>`;
+    }).join('');
+
+    h += `<div class="card"><div class="section-title">Per-condition results</div>
+      <div class="cond-list">${items}</div></div>`;
+  }
+
+  return h;
+}
+
+function imgCard(title, b64) {
+  return `<div class="img-card">
+    <div class="img-card-title">${esc(title)}</div>
+    <img src="data:image/png;base64,${b64}" alt="${esc(title)}" loading="lazy">
+  </div>`;
+}
+
+function makeTable(rows, colorDiff = false) {
+  if (!rows?.length) return '<p>No data</p>';
+  const cols = Object.keys(rows[0]);
+  const head = `<thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>`;
+  const body = rows.map(row => {
+    const cells = cols.map(c => {
+      const v = row[c];
+      let fmt = v == null ? '—' : (typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(3)) : v);
+      let cls = '';
+      if (colorDiff && c === 'diff_vs_rest' && typeof v === 'number') {
+        cls = v > 0.05 ? 'cell-sig-pos' : v < -0.05 ? 'cell-sig-neg' : '';
+      }
+      return `<td class="${cls}">${esc(String(fmt))}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<table class="res-tbl">${head}<tbody>${body}</tbody></table>`;
+}
+
+function makePvalTable(rows) {
+  if (!rows?.length) return '<p>No data</p>';
+  const cols = Object.keys(rows[0]);
+  const skip = new Set(['cond_descr', 'cond_name']);
+  const head = `<thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>`;
+  const body = rows.map(row => {
+    const cells = cols.map(c => {
+      const v = row[c];
+      let fmt = v == null ? '—' : (typeof v === 'number' ? v.toFixed(4) : v);
+      let cls = '';
+      if (!skip.has(c) && typeof v === 'number') {
+        cls = v < 0.05 ? 'cell-sig-pos' : 'cell-sig-neg';
+      }
+      return `<td class="${cls}">${esc(String(fmt))}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<table class="res-tbl">${head}<tbody>${body}</tbody></table>`;
+}
+
+function toggleCond(i) {
+  document.getElementById('ci' + i).classList.toggle('open');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+function val(id)      { return document.getElementById(id)?.value ?? null; }
+function intVal(id)   { const v = document.getElementById(id)?.value; return v ? parseInt(v) : null; }
+function floatVal(id) { const v = document.getElementById(id)?.value; return v ? parseFloat(v) : null; }
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
