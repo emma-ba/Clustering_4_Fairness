@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "c4f"
+version = "0.1.0"
+description = "Cluster ML model outputs and analyze prediction error disparities across demographic groups"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "scikit-learn",
+    "scikit-learn-extra",
+    "hdbscan",
+    "kmodes",
+]
+
+[project.scripts]
+c4f = "c4f.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["c4f*", "src"]
