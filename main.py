@@ -70,7 +70,101 @@ def parse_feature_weights(weight_str, regular_cols, sensitive_cols, special_cols
             if name in all_cols:
                 weights[name] = w
 
-    return weights if weights else None 
+    return weights if weights else None
+
+
+def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm):
+    """
+    Encode categorical columns for clustering.
+
+    For kprototypes: no encoding — returns the column names so per-condition
+    indices can be computed later.
+    For all other algorithms: one-hot encodes string/category columns and
+    updates all column lists in-place.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+    col_lists : dict of {name: list_of_cols}
+        e.g. {'regular': [...], 'sensitive': [...], 'proxy': [...], 'special': [...]}
+    categorical_cols_arg : list of str
+        Explicitly specified categorical columns from --categorical_cols.
+    algorithm : str
+
+    Returns
+    -------
+    df_encoded : pd.DataFrame
+    col_lists_updated : dict
+    categorical_col_names : list of str
+        For kprototypes: names of categorical columns (caller computes indices per condition).
+        For other algorithms: empty list (all columns are now numeric after encoding).
+    """
+    # Collect all columns used in clustering
+    seen = set()
+    all_cols_ordered = []
+    for cols in col_lists.values():
+        for c in cols:
+            if c not in seen:
+                seen.add(c)
+                all_cols_ordered.append(c)
+
+    # Identify categorical columns: dtype-based + user-specified
+    categorical_col_names = set(categorical_cols_arg or [])
+    for col in all_cols_ordered:
+        if col in df.columns:
+            dtype = df[col].dtype
+            if dtype.kind in ('O', 'U', 'S') or dtype.name in ('category', 'string'):
+                categorical_col_names.add(col)
+
+    if algorithm == 'kprototypes':
+        # kprototypes handles mixed types internally — no encoding needed
+        return df, col_lists, list(categorical_col_names)
+
+    if not categorical_col_names:
+        return df, col_lists, []
+
+    # One-hot encode each categorical column and update all col_lists
+    df_encoded = df.copy()
+    col_lists_updated = {name: list(cols) for name, cols in col_lists.items()}
+
+    for col in sorted(categorical_col_names):
+        if col not in df_encoded.columns:
+            continue
+
+        n_unique = df_encoded[col].nunique(dropna=True)
+        if n_unique <= 1:
+            # Constant column — drop from all lists
+            for cols in col_lists_updated.values():
+                if col in cols:
+                    cols.remove(col)
+            continue
+
+        # Binary: drop_first=True gives a single 0/1 column.
+        # Multi-class: drop_first=False keeps all K categories.
+        drop_first = (n_unique == 2)
+        dummies = pd.get_dummies(df_encoded[col], prefix=col, drop_first=drop_first).astype('int8')
+        dummy_cols = list(dummies.columns)
+
+        # Check for column name collisions with existing columns (excluding the col being replaced)
+        existing_cols = set(df_encoded.columns) - {col}
+        collisions = existing_cols & set(dummy_cols)
+        if collisions:
+            raise ValueError(
+                f"One-hot encoding '{col}' would create columns {sorted(collisions)} that already "
+                f"exist in the dataset. Rename or remove those columns before encoding."
+            )
+
+        df_encoded = pd.concat([df_encoded.drop(columns=[col]), dummies], axis=1)
+
+        # Replace the original column with dummy columns in each list
+        for cols in col_lists_updated.values():
+            if col in cols:
+                idx = cols.index(col)
+                cols.remove(col)
+                for j, dc in enumerate(dummy_cols):
+                    cols.insert(idx + j, dc)
+
+    return df_encoded, col_lists_updated, []
 
 
 def parse_args():
@@ -172,6 +266,8 @@ def parse_args():
     parser.add_argument("--proxy_cols", type=str, default=None, help="Proxy features for sensitive attributes (comma-separated column names)")                                                                                  
     parser.add_argument("--special_cols", type=str, default=None,
                           help="Special features like SHAP values (comma-separated column names)")
+    parser.add_argument("--categorical_cols", type=str, default=None,
+                        help="Columns to treat as categorical (comma-separated). String/category dtype columns are detected automatically; use this to force-mark additional columns.")
     parser.add_argument("--error_col", type=str, default=None,
                         help="Error column for analysis. Binary (0/1) for classification, continuous for regression.")
     parser.add_argument("--error_type", type=str, default="binary",
@@ -237,6 +333,16 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         raise ValueError("At least one feature group (--regular_cols, --sensitive_cols, or --special_cols) is required in experiment mode")
     if not sensitive_cols:
         raise ValueError("--sensitive_cols is required in experiment mode (for proportion analysis)")
+
+    # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes)
+    categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
+    col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols, 'special': special_cols}
+    df, col_lists, categorical_col_names = _encode_multiclass_categoricals(
+        df, col_lists, categorical_cols_arg, args.algorithm
+    )
+    regular_cols = col_lists['regular']
+    sensitive_cols = col_lists['sensitive']
+    special_cols = col_lists['special']
 
     # Build groups dict for condition generation
     groups = {}
@@ -315,6 +421,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         min_datapoints=args.min_datapoints,
         error_type=args.error_type,
         feature_weights=feature_weights,
+        categorical_col_names=categorical_col_names,
     )
 
     # Print progress for each condition
@@ -630,16 +737,26 @@ def main():
     regular_cols = parse_column_list(args.regular_cols)
     sensitive_cols = parse_column_list(args.sensitive_cols)
     proxy_cols = parse_column_list(args.proxy_cols)
-    special_cols = parse_column_list(args.special_cols)                                                                                                                                                    
-                                                                                                                                                                                        
-    # Build clustering features 
+    special_cols = parse_column_list(args.special_cols)
+
+    # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes)
+    categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
+    col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols,
+                 'proxy': proxy_cols, 'special': special_cols}
+    df, col_lists, categorical_col_names = _encode_multiclass_categoricals(
+        df, col_lists, categorical_cols_arg, args.algorithm
+    )
+    regular_cols = col_lists['regular']
+    sensitive_cols = col_lists['sensitive']
+    proxy_cols = col_lists['proxy']
+    special_cols = col_lists['special']
+
+    # Build clustering features
     clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols
     features = df[clustering_cols] if clustering_cols else df
 
-    # Identify categorical columns (string-like or category dtype)
-    categorical_features = [i for i, col in enumerate(clustering_cols)
-                            if df[col].dtype.kind in ('O', 'U', 'S') or df[col].dtype.name == 'category'
-                            or str(df[col].dtype) in ('string', 'str')]
+    # Categorical feature indices (only non-empty for kprototypes)
+    categorical_features = [i for i, c in enumerate(clustering_cols) if c in categorical_col_names] or None
 
     # Parse feature weights
     feature_weights = parse_feature_weights(

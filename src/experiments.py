@@ -43,10 +43,22 @@ def _expand_multiclass_cols(data, sensitive_cols):
       expanded_cols.append(col)
     else:
       # Multi-class: create per-value binary indicators
+      indicator_names = []
       for val in unique_vals:
         indicator_name = f'{col}={val}'
         data[indicator_name] = (data[col] == val).astype(int)
         expanded_cols.append(indicator_name)
+        indicator_names.append(indicator_name)
+      # OOD check: each row should belong to at most one category
+      row_sums = data[indicator_names].sum(axis=1)
+      if (row_sums > 1).any():
+        raise ValueError(
+          f"Sensitive column '{col}' has rows assigned to multiple categories "
+          f"after expansion. Check for overlapping values in the data."
+        )
+      n_nan = (row_sums == 0).sum()
+      if n_nan > 0:
+        print(f"  Warning: {n_nan} rows with missing value in '{col}' — assigned 0 for all indicators.")
   return data, expanded_cols
 
 
@@ -514,7 +526,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             scoring_fn=None, sensitive_cols=None, error_col='errors',
                             min_cluster_size=15, min_samples=5, eps=0.5,
                             min_datapoints=None, feature_weights=None,
-                            error_type='binary'):
+                            error_type='binary', categorical_col_names=None):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -571,8 +583,13 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
             'cond_res': [],
             'cond_recap': []}
 
+  cat_names_set = set(categorical_col_names) if categorical_col_names else set()
+
   for i in range(len(exp_condition)):
     feature_set = exp_condition['feature_set'][i]
+
+    # Compute categorical indices for this condition's feature set
+    cat_features = [j for j, c in enumerate(feature_set) if c in cat_names_set] or None
 
     result = cluster(
         features=data[feature_set],
@@ -589,6 +606,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
         eps=eps,
         min_datapoints=min_datapoints,
         feature_weights=feature_weights,
+        categorical_features=cat_features,
     )
 
     # Build result DataFrame: original data + 'clusters' column

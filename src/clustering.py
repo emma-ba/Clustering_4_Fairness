@@ -38,19 +38,25 @@ def gower_distance(X: np.ndarray,
     """
     Compute Gower distance matrix for mixed-type data.
 
+    Vectorized implementation: loops over features (n_features iterations of
+    O(n²) NumPy operations) instead of over sample pairs (O(n²) Python
+    iterations). Handles NaN by skipping missing features per pair and
+    re-normalizing by the sum of active feature weights.
+
     Parameters
     ----------
     X : np.ndarray
-        Feature matrix of shape (n_samples, n_features).
+        Numeric feature matrix of shape (n_samples, n_features).
     categorical_features : list[int], optional
-        Indices of categorical features. If None, all features are treated as numeric.
+        Indices of categorical features (match/mismatch distance).
+        If None, all features are treated as numeric.
     weights : np.ndarray, optional
-        Feature weights of shape (n_features,). If None, equal weights are used.
+        Feature weights of shape (n_features,). If None, equal weights.
 
     Returns
     -------
     np.ndarray
-        Distance matrix of shape (n_samples, n_samples).
+        Symmetric distance matrix of shape (n_samples, n_samples), values in [0, 1].
     """
     n_samples, n_features = X.shape
 
@@ -62,30 +68,45 @@ def gower_distance(X: np.ndarray,
 
     weights = weights / weights.sum()
 
-    numeric_features = [i for i in range(n_features) if i not in categorical_features]
+    X = X.astype(float)
 
-    # Compute ranges for numeric features
-    ranges = np.zeros(n_features)
+    categorical_set = set(categorical_features)
+    numeric_features = [i for i in range(n_features) if i not in categorical_set]
+
+    # Compute per-feature ranges for numeric columns (NaN-safe)
+    ranges = np.ones(n_features)
     for i in numeric_features:
-        col = X[:, i].astype(float)
-        ranges[i] = col.max() - col.min()
-        if ranges[i] == 0:
-            ranges[i] = 1.0
+        col_valid = X[:, i][~np.isnan(X[:, i])]
+        if len(col_valid) > 0:
+            r = col_valid.max() - col_valid.min()
+            ranges[i] = r if r > 0 else 1.0
 
-    distance_matrix = np.zeros((n_samples, n_samples))
+    nan_mask = np.isnan(X)                          # (n, f) — True where NaN
+    X_safe = np.where(nan_mask, 0.0, X)             # replace NaN with 0 for safe arithmetic
 
-    for i in range(n_samples):
-        for j in range(i + 1, n_samples):
-            d = 0.0
-            for k in range(n_features):
-                if k in categorical_features:
-                    d += weights[k] * (0 if X[i, k] == X[j, k] else 1)
-                else:
-                    d += weights[k] * abs(float(X[i, k]) - float(X[j, k])) / ranges[k]
-            distance_matrix[i, j] = d
-            distance_matrix[j, i] = d
+    D = np.zeros((n_samples, n_samples))             # weighted distance accumulator
+    W = np.zeros((n_samples, n_samples))             # active weight accumulator
 
-    return distance_matrix
+    for k in range(n_features):
+        xi = X_safe[:, k]                            # (n,)
+        nan_k = nan_mask[:, k]                       # (n,)
+        pair_nan_k = nan_k[:, None] | nan_k[None, :] # (n, n): True if either value is NaN
+
+        if k in categorical_set:
+            contrib = (xi[:, None] != xi[None, :]).astype(float)
+        else:
+            contrib = np.abs(xi[:, None] - xi[None, :]) / ranges[k]
+
+        contrib[pair_nan_k] = 0.0
+
+        D += weights[k] * contrib
+        W += weights[k] * (~pair_nan_k)
+
+    # Re-normalize by active weight; pairs with all-NaN features get distance 0
+    with np.errstate(invalid='ignore', divide='ignore'):
+        D = np.where(W > 0, D / W, 0.0)
+
+    return D
 
 
 def _find_best_k(
