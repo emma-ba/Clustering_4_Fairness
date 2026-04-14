@@ -128,10 +128,11 @@ def parse_args():
     parser.add_argument("--feature_weights", type=str, default=None,
                         help="Feature weights as 'col:weight' pairs. Groups: 'regular:1.5,sensitive:0.5'. Individual: 'age:2.0'. Mixed: 'regular:1.0,age:2.0'")
 
-    # Cluster filtering
-    #  TODO: Make only one (compare with the HDBSCAN parameter min_cluster_size)
+    # DONE: --min_cluster_size removed. --min_datapoints is the single unified parameter:
+    # for HDBSCAN it maps to min_cluster_size (native, enforced during extraction);
+    # for all other algorithms it is a post-hoc filter that reassigns small clusters to noise.
     parser.add_argument("--min_datapoints", type=int, default=None,
-                        help="Minimum datapoints per cluster (smaller clusters become noise)")
+                        help="Minimum cluster size. For HDBSCAN: enforced natively during extraction. For all other algorithms: post-hoc filter (small clusters become noise).")
 
     # Statistical tests
     parser.add_argument("--separability_check", action="store_true",
