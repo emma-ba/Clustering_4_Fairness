@@ -1,6 +1,53 @@
 # Clustering 4 Fairness
 
-Cluster data points and analyze whether prediction errors or sensitive attributes are distributed unevenly across clusters. Support (for now) both classification (binary error) and regression (signed error) tasks.
+Cluster data points and analyze whether prediction errors or sensitive attributes are distributed unevenly across clusters. Supports both classification (binary error) and regression (signed error) tasks.
+
+---
+
+## Quick start
+
+Install once from the repo root, then call `c4f` from anywhere:
+
+```bash
+pip install -e .
+```
+
+```bash
+c4f --data_path Data/compas/Compas_error_shap.csv \
+    --regular_cols age_scaled,priors_count_scaled \
+    --sensitive_cols sex_Female,race_African-American \
+    --error_col errors \
+    --algorithm kmeans --n_clusters 5 --seed 42
+```
+
+`c4f` and `python main.py` are identical — same arguments, same output. The installed package is an editable install pointing at this repo, so any local changes take effect immediately without reinstalling.
+
+> **Note:** This setup (`pip install -e .`) is intended for local research use. Publishing to PyPI would require renaming `src/` to avoid package name conflicts and making the CLI entry point self-contained.
+
+---
+
+## Project structure
+
+```
+Clustering_4_Fairness/
+├── main.py                  # CLI entry point — run directly or via `c4f`
+├── pyproject.toml           # package definition for pip install -e .
+├── requirements.txt
+│
+├── src/                     # core library
+│   ├── clustering.py        # cluster(), gower_distance(), ClusteringResult
+│   ├── scoring.py           # silhouette, chi2, kruskal, composite scorers
+│   ├── experiments.py       # make_recap(), run_experiments_generic(), chi tests
+│   ├── visualization.py     # scatter plots, composition bars, heatmaps
+│   ├── fairness_metrics.py  # demographic parity, representation ratio
+│   └── preprocessing.py     # encode_categoricals()
+│
+├── c4f/                     # package entry point (re-exports src, bridges to main.py)
+│
+├── Data/                    # datasets (not versioned)
+├── scripts/                 # preprocessing scripts
+└── run_tests.sh             # test suite
+```
 
 ---
 
@@ -71,7 +118,6 @@ python main.py --data_path <path> [options]
 | Parameter | Description |
 |---|---|
 | `--eps` | Maximum distance between two points for them to be considered neighbors (DBSCAN only) — smaller = tighter clusters |
-| `--min_cluster_size` | Minimum number of points required to form a cluster (HDBSCAN) |
 | `--min_samples` | Minimum number of points in a neighborhood for a point to be a core point (HDBSCAN) — higher = more conservative, more noise |
 
 ### Analysis & output
@@ -80,7 +126,7 @@ python main.py --data_path <path> [options]
 | `--subset` | Restrict analysis to a confusion matrix subset: `TP`, `TN`, `FP`, `FN`, `TP_TN`, `FP_FN`. Useful for e.g. clustering only false positives to find systematic patterns |
 | `--min_datapoints` | Drop clusters smaller than this threshold before analysis — avoids noisy small clusters |
 | `--separability_check` | Print feature separability test results to the console in addition to saving them |
-| `--projection` | Dimensionality reduction method for the scatter plot: `tsne` (default), `pca`, `none` |
+| `--projection` | Dimensionality reduction method for the scatter plot: `tsne` (default), `pca`, `mds`, `none`. When `--distance gower` is used, MDS is applied automatically regardless of this flag |
 | `--no_plots` | Skip generating and saving all visualization plots (recap heatmap, scatter, composition bars) |
 | `--output_dir` | Custom output directory. Default is `clustering_results/<date>/` |
 | `--experiment` | Run in experiment mode: automatically generates all combinations of feature groups (REG, SEN, ERR) and runs each as a separate condition, then produces a comparative summary |
