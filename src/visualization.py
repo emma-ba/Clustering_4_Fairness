@@ -13,31 +13,38 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+from sklearn.manifold import TSNE, MDS
 from typing import Optional, Literal, Union
 from .clustering import ClusteringResult
 
-# NOTE: Use PCA when visualizing KMeans/BisectingKMeans results - PCA is a linear projection that preserves Euclidean distances (same metric KMeans uses). Use t-SNE when visualizing HDBSCAN/DBSCAN results - t-SNE preserves local neighborhood structure (same as density-based algorithms).  Mixing these (e.g. TSNE for KMeans) will show misleading cluster boundaries because the projection uses different distance concepts than the algorithm. 
+# NOTE: Use PCA when visualizing KMeans/BisectingKMeans results — preserves Euclidean
+# distances (same metric KMeans uses). Use t-SNE for HDBSCAN/DBSCAN — preserves local
+# neighborhood structure. Use MDS when clustering used Gower distance — MDS with a
+# precomputed Gower matrix embeds points in 2D while respecting the mixed-type distance.
 def reduce_dimensions(
     X: np.ndarray,
-    method: Literal["pca", "tsne"] = "tsne",
+    method: Literal["pca", "tsne", "mds"] = "tsne",
     n_components: int = 2,
     random_state: int = 42,
+    precomputed: bool = False,
 ) -> np.ndarray:
     """
-    Reduce feature matrix to lower dimensions for visualization.
+    Reduce a feature matrix (or precomputed distance matrix) to 2D for visualization.
 
     Parameters
     ----------
     X : np.ndarray
-        Feature matrix of shape (n_samples, n_features).
-    method : {"pca", "tsne"}, default="tsne"
-        Dimensionality reduction method.
-        Note: TSEN or PCA
+        Feature matrix (n_samples, n_features), or a square distance matrix
+        (n_samples, n_samples) when precomputed=True.
+    method : {"pca", "tsne", "mds"}, default="tsne"
+        Dimensionality reduction method. Use "mds" with precomputed=True for
+        Gower-distance-based projections.
     n_components : int, default=2
         Number of output dimensions.
     random_state : int, default=42
         Random seed for reproducibility.
+    precomputed : bool, default=False
+        If True, X is treated as a precomputed distance matrix (only valid for "mds").
 
     Returns
     -------
@@ -46,24 +53,23 @@ def reduce_dimensions(
     """
     if method == "pca":
         reducer = PCA(n_components=n_components, random_state=random_state)
-    elif method == "umap":
-        # UMAP is disabled - use tsne or pca instead
-        # To re-enable: uncomment 'import umap' at top and the code below
-        # reducer = umap.UMAP(
-        #     n_neighbors=15,
-        #     min_dist=0.1,
-        #     n_components=n_components,
-        #     random_state=random_state,
-        # )
-        raise ValueError("UMAP is disabled. Use 'tsne' or 'pca' instead.")
     elif method == "tsne":
         reducer = TSNE(
             n_components=n_components,
             random_state=random_state,
             perplexity=30,
         )
+    elif method == "mds":
+        dissimilarity = "precomputed" if precomputed else "euclidean"
+        reducer = MDS(
+            n_components=n_components,
+            random_state=random_state,
+            dissimilarity=dissimilarity,
+            normalized_stress="auto",
+            n_init=4,
+        )
     else:
-        raise ValueError(f"Unknown method: {method}. Use 'tsne' or 'pca'.")
+        raise ValueError(f"Unknown method: '{method}'. Use 'pca', 'tsne', or 'mds'.")
 
     return reducer.fit_transform(X)
 
