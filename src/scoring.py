@@ -161,8 +161,8 @@ def make_chi2_sensitive_scorer(
 
 
 def make_composite_scorer(
-    error_data: np.ndarray,
-    sensitive_data: np.ndarray,
+    error_data: Optional[np.ndarray] = None,
+    sensitive_data: Optional[np.ndarray] = None,
     mask: Optional[np.ndarray] = None,
     silhouette_weight: float = 0.3,
     error_weight: float = 0.5,
@@ -172,45 +172,64 @@ def make_composite_scorer(
     """
     Factory: weighted combination of silhouette, error separation, and fairness.
 
-    All components are normalized to [0, 1] before weighting.
+    Components are included only when the corresponding data is provided.
+    Weights accept any value in [0, Inf) and are normalized to sum to 1 internally.
     Higher composite score = better.
 
     Parameters
     ----------
-    error_data : np.ndarray
-        Binary error column (0/1) or continuous error column (regression).
-    sensitive_data : np.ndarray
-        Sensitive attribute column.
+    error_data : np.ndarray, optional
+        Binary (0/1) or continuous error column. Omit to exclude error component.
+    sensitive_data : np.ndarray, optional
+        Sensitive attribute column. Omit to exclude fairness component.
     mask : np.ndarray, optional
         Boolean mask from subset filtering.
     silhouette_weight : float
-        Weight for silhouette component (default 0.3).
+        Relative weight for silhouette component (0 to Inf, default 0.3).
     error_weight : float
-        Weight for error separation component (default 0.5).
+        Relative weight for error separation component (0 to Inf, default 0.5).
     fairness_weight : float
-        Weight for fairness component (default 0.2).
+        Relative weight for fairness component (0 to Inf, default 0.2).
     error_type : str
         'binary' for chi2-based error scorer, 'regression' for Kruskal-Wallis.
     """
-    if error_type == 'regression':
-        error_scorer = make_kruskal_error_scorer(error_data, mask)
-    else:
-        error_scorer = make_chi2_error_scorer(error_data, mask)
-    sensitive_scorer = make_chi2_sensitive_scorer(sensitive_data, mask)
+    # Zero out weights for missing components
+    if error_data is None:
+        error_weight = 0.0
+    if sensitive_data is None:
+        fairness_weight = 0.0
+
+    # Normalize weights to sum to 1
+    total = silhouette_weight + error_weight + fairness_weight
+    if total <= 0:
+        silhouette_weight, error_weight, fairness_weight = 1.0, 0.0, 0.0
+        total = 1.0
+    w_sil = silhouette_weight / total
+    w_err = error_weight / total
+    w_fair = fairness_weight / total
+
+    error_scorer = None
+    if error_data is not None:
+        if error_type == 'regression':
+            error_scorer = make_kruskal_error_scorer(error_data, mask)
+        else:
+            error_scorer = make_chi2_error_scorer(error_data, mask)
+
+    sensitive_scorer = None
+    if sensitive_data is not None:
+        sensitive_scorer = make_chi2_sensitive_scorer(sensitive_data, mask)
 
     def scorer(X: np.ndarray, labels: np.ndarray) -> float:
         # Silhouette: range [-1, 1] -> normalize to [0, 1]
         sil = silhouette_scorer(X, labels)
-        sil_norm = (sil + 1.0) / 2.0
+        score = w_sil * ((sil + 1.0) / 2.0)
 
-        # Error separation: already [0, 1]
-        err_score = error_scorer(X, labels)
+        if error_scorer is not None:
+            score += w_err * error_scorer(X, labels)
 
-        # Fairness: already [0, 1]
-        fair_score = sensitive_scorer(X, labels)
+        if sensitive_scorer is not None:
+            score += w_fair * sensitive_scorer(X, labels)
 
-        return (silhouette_weight * sil_norm +
-                error_weight * err_score +
-                fairness_weight * fair_score)
+        return score
 
     return scorer

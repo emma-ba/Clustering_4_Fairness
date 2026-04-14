@@ -18,6 +18,7 @@ from src.experiments import (
     recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap,
     separability_check
 )
+from src.preprocessing import encode_categoricals
 from datetime import datetime
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -74,97 +75,8 @@ def parse_feature_weights(weight_str, regular_cols, sensitive_cols, special_cols
 
 
 def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm):
-    """
-    Encode categorical columns for clustering.
-
-    For kprototypes: no encoding — returns the column names so per-condition
-    indices can be computed later.
-    For all other algorithms: one-hot encodes string/category columns and
-    updates all column lists in-place.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-    col_lists : dict of {name: list_of_cols}
-        e.g. {'regular': [...], 'sensitive': [...], 'proxy': [...], 'special': [...]}
-    categorical_cols_arg : list of str
-        Explicitly specified categorical columns from --categorical_cols.
-    algorithm : str
-
-    Returns
-    -------
-    df_encoded : pd.DataFrame
-    col_lists_updated : dict
-    categorical_col_names : list of str
-        For kprototypes: names of categorical columns (caller computes indices per condition).
-        For other algorithms: empty list (all columns are now numeric after encoding).
-    """
-    # Collect all columns used in clustering
-    seen = set()
-    all_cols_ordered = []
-    for cols in col_lists.values():
-        for c in cols:
-            if c not in seen:
-                seen.add(c)
-                all_cols_ordered.append(c)
-
-    # Identify categorical columns: dtype-based + user-specified
-    categorical_col_names = set(categorical_cols_arg or [])
-    for col in all_cols_ordered:
-        if col in df.columns:
-            dtype = df[col].dtype
-            if dtype.kind in ('O', 'U', 'S') or dtype.name in ('category', 'string'):
-                categorical_col_names.add(col)
-
-    if algorithm == 'kprototypes':
-        # kprototypes handles mixed types internally — no encoding needed
-        return df, col_lists, list(categorical_col_names)
-
-    if not categorical_col_names:
-        return df, col_lists, []
-
-    # One-hot encode each categorical column and update all col_lists
-    df_encoded = df.copy()
-    col_lists_updated = {name: list(cols) for name, cols in col_lists.items()}
-
-    for col in sorted(categorical_col_names):
-        if col not in df_encoded.columns:
-            continue
-
-        n_unique = df_encoded[col].nunique(dropna=True)
-        if n_unique <= 1:
-            # Constant column — drop from all lists
-            for cols in col_lists_updated.values():
-                if col in cols:
-                    cols.remove(col)
-            continue
-
-        # Binary: drop_first=True gives a single 0/1 column.
-        # Multi-class: drop_first=False keeps all K categories.
-        drop_first = (n_unique == 2)
-        dummies = pd.get_dummies(df_encoded[col], prefix=col, drop_first=drop_first).astype('int8')
-        dummy_cols = list(dummies.columns)
-
-        # Check for column name collisions with existing columns (excluding the col being replaced)
-        existing_cols = set(df_encoded.columns) - {col}
-        collisions = existing_cols & set(dummy_cols)
-        if collisions:
-            raise ValueError(
-                f"One-hot encoding '{col}' would create columns {sorted(collisions)} that already "
-                f"exist in the dataset. Rename or remove those columns before encoding."
-            )
-
-        df_encoded = pd.concat([df_encoded.drop(columns=[col]), dummies], axis=1)
-
-        # Replace the original column with dummy columns in each list
-        for cols in col_lists_updated.values():
-            if col in cols:
-                idx = cols.index(col)
-                cols.remove(col)
-                for j, dc in enumerate(dummy_cols):
-                    cols.insert(idx + j, dc)
-
-    return df_encoded, col_lists_updated, []
+    """Thin wrapper — see src.preprocessing.encode_categoricals."""
+    return encode_categoricals(df, col_lists, categorical_cols_arg, algorithm)
 
 
 def parse_args():
@@ -186,13 +98,15 @@ def parse_args():
     parser.add_argument("--n_max", type=int, default=None,
                         help="Maximum number of clusters (for range-based k search)")
 
-    #DBSCAN parameters       
-    parser.add_argument("--eps", type=float, default=0.5,                                                                                                                               
+    # DONE: Harmonize --eps: duplicate was in c4f/main.py only; main.py has a single --eps definition.
+    #DBSCAN parameters
+    parser.add_argument("--eps", type=float, default=0.5,
                         help="Maximum distance between samples for neighborhood (DBSCAN)")
     
     # HDBSCAN parameters
     # Note: For a general minimum cluster size filter across all algorithms, use --min_datapoints (post-hoc filter).
     # min_cluster_size is HDBSCAN-specific (built-in parameter controlling hierarchical extraction).
+    
     parser.add_argument("--min_cluster_size", type=int, default=15,
                         help="Minimum cluster size (HDBSCAN)")
     
@@ -208,18 +122,20 @@ def parse_args():
     parser.add_argument("--max_iter", type=int, default=300,
                         help="Maximum iterations for KMeans/BisectingKMeans")
 
+    # DONE: composite is now the default scoring. Weights accept 0-Inf and are normalized internally; missing components (no error_col/sensitive_cols) are skipped gracefully.
     # Scoring method for k-selection
-    parser.add_argument("--scoring", type=str, default="silhouette",
+    parser.add_argument("--scoring", type=str, default="composite",
                         choices=["silhouette", "chi2_error", "chi2_sensitive", "composite"],
-                        help="Scoring method for k-search: silhouette (cluster quality), chi2_error (error separation), chi2_sensitive (fairness), composite (weighted combination)")
+                        help="Scoring method for k-search: composite (default, weighted silhouette+error+fairness), silhouette (cluster quality only), chi2_error (error separation), chi2_sensitive (fairness)")
     parser.add_argument("--composite_weights", type=str, default="silhouette:0.3,error:0.5,fairness:0.2",
-                        help="Weights for composite scoring as 'silhouette:W,error:W,fairness:W'")
+                        help="Weights for composite scoring as 'silhouette:W,error:W,fairness:W'. Accepts any value in [0, Inf); weights are normalized to sum to 1.")
 
     # Feature weights
     parser.add_argument("--feature_weights", type=str, default=None,
                         help="Feature weights as 'col:weight' pairs. Groups: 'regular:1.5,sensitive:0.5'. Individual: 'age:2.0'. Mixed: 'regular:1.0,age:2.0'")
 
     # Cluster filtering
+    #  TODO: Make only one (compare with the HDBSCAN parameter min_cluster_size)
     parser.add_argument("--min_datapoints", type=int, default=None,
                         help="Minimum datapoints per cluster (smaller clusters become noise)")
 
@@ -241,25 +157,32 @@ def parse_args():
                         choices=["pca", "tsne", "none"],
                         help="Projection method for visualization (use 'none' to skip)")
 
-    parser.add_argument("--regular_cols", type=str, default=None, help="Regular features for clustering (comma-separated column names)")          
-    # TODO: Assess the feasibility of using the error as an input feature to the clustering or oversample the datapoints. e.g. SMOTE for binary features
-    # TODO: Experiment with Health Data. Not a priority.
-    # TODO: Parse crimes columns percentages by groups to make sense - not a priority 
-    # TODO: Do the IQR for the student age, instead of having all ages. For numeric sensitive features, we have 2 columns, the iqr and the P-value.
-    # TODO: Look into journales that take research artifacts. Or a DEMO at a conference.
-    # TODO: Look into finding hte number of clusters if it works or not. Should wokr
-    
-    # NOTE: On a besoin juste d'un datapoint pour le ndcg. Meme system que pour regression. 
-    
-    # TODO: Finalise binary class & regression, tester entre nous, etc.
-    # TODO: Remove decile_score_scaled & Shap_decile_score_scaled from compas dataset. 
-    # TODO: Package
-    # TODO: site web ou on peut uploader le dataset, confirmer les colommes a utilier, sensitives. Penser un peu aux tests qu'on peut applquer. 
-    # TODO: Publish: Look for open science journals - 1 v all
-    # TODO: Try clustering iteratively. 
-    # TODO: Multi-class
-    # TODO: On peut faire un clustering qui considere +ieurs formes d'erruer. Pour pb de ranking, on a P & Recall - pour + tard.
+    parser.add_argument("--regular_cols", type=str, default=None, help="Regular features for clustering (comma-separated column names)")     
+    # TODO: Cluster plots are too sparse — investigate why the scatter is so spread out. Likely the projection (PCA/t-SNE) is not accounting for the distance metric used; points end up in a low-density Euclidean projection even when clusters are tight in Gower space.
+    # TODO: PCA with Gower distance — PCA assumes Euclidean space so it cannot be applied directly to a Gower distance matrix. Investigate kernel PCA or MDS (metric/non-metric) as alternatives that can take a precomputed distance matrix and still give a 2D projection.
+    # TODO: Silhouette score uses Euclidean distance on raw features even when clustering was done with Gower — this is wrong. When distance=gower, silhouette should be computed on the precomputed Gower distance matrix (metric="precomputed"). Fix or flag this inconsistency.
+    # TODO: Kmedoids cluster labels are not sequential (e.g. cluster 0 and 4 instead of 0 and 1) — investigate whether this is a labeling issue post-fit or a result of k-search skipping some cluster counts. Relabel clusters to be contiguous 0..k-1 in output.
+    # TODO: Side-by-side comparison of Euclidean vs Gower clustering results — for the same k, show cluster proportions, error separation (chi2/KW), and sensitive feature distribution per cluster for both distances. Helps assess whether Gower adds value over standard Euclidean.
+    # DONE: Exclude groups from experiment condition matrix — --experiment can now take an optional comma-separated list of groups to exclude (e.g. --experiment SPECIAL,ERR). Excluded columns stay available for scoring and fairness evaluation; they're only removed from the clustering feature combinations.
+    # TODO: Finish package
+    # TODO: Look into journals that take research artifacts. Or a DEMO at a conference.
+    # TODO: Documentation
     # TODO: ACM Badge
+    # TODO: Publish: Look for open science journals - 1 v all
+    # NOTE: On a besoin juste d'un datapoint pour le ndcg. Meme system que pour regression.
+    # NOTE: Ranking/recommender system: need P & Recall as error measures for clustering that considers multiple error forms.
+    # TODO: site web ou on peut uploader le dataset, confirmer les colommes a utilier, sensitives. Penser un peu aux tests qu'on peut applquer.
+    # TODO: On peut faire un clustering qui considere +ieurs formes d'erruer. Pour pb de ranking, on a P & Recall - pour + tard.
+    # TODO: Look into finding hte number of clusters if it works or not. Should wokr
+    # TODO: Try clustering iteratively.
+    # TODO: K-centroid clustering variant - have including the fair-centroid version.
+    
+    # DONE: Multi-class sensitive features. Extended the pipeline to support sensitive columns with 3+ categories (e.g. race with white/black/hispanic). Encoding is automatic — no user action needed, the tool detects it from the data.
+    # DONE: --categorical_cols CLI arg. Previously there was no way to tell the tool that a numeric-looking column should be treated as categorical (e.g. zip codes, encoded labels). Users can now pass --categorical_cols col1,col2 to force-mark columns regardless of dtype.
+    # DONE: Package — c4f/ scaffold created with pyproject.toml for pip-installable package. Push to package branch: git checkout package && git add c4f/ pyproject.toml && git commit && git push origin package.
+    # DONE: Finalise binary class & regression — binary classification uses chi2 contingency on error col (0/1); regression uses Kruskal-Wallis on continuous error values. Both wired through --error_type flag. Composite scorer selects chi2 or KW automatically based on error_type.
+    
+    # DONE: make composite default scoring — composite scorer now default (was silhouette). Weights (silhouette:0.3, error:0.5, fairness:0.2) accept any value in [0, Inf) and are normalized to sum to 1 internally. Missing components (no error_col / no sensitive_cols) are skipped gracefully; falls back to pure silhouette if neither is provided.
     
     parser.add_argument("--sensitive_cols", type=str, default=None,
                         help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")                                                                                           
@@ -273,12 +196,6 @@ def parse_args():
     parser.add_argument("--error_type", type=str, default="binary",
                         choices=["binary", "regression"],
                         help="Type of error column: 'binary' (classification 0/1) or 'regression' (continuous). Default: binary")
-    
-    
-    
-    
-    
-
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
     # Output
@@ -288,8 +205,8 @@ def parse_args():
                         help="Output directory for plots")
 
     # Batch experiment mode
-    parser.add_argument("--experiment", action="store_true",
-                        help="Run batch experiment with all feature group combinations")
+    parser.add_argument("--experiment", nargs="?", const="", default=None,
+                        help="Run batch experiment. Optionally pass comma-separated groups to exclude (e.g. --experiment SPECIAL or --experiment SPECIAL,ERR). Available: REG, SEN, ERR, SPECIAL.")
 
     return parser.parse_args()
 
@@ -354,6 +271,16 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     if special_cols:
         groups['SPECIAL'] = special_cols
 
+    # Apply group exclusions passed to --experiment (e.g. --experiment REG,SPECIAL).
+    # Excluded columns are still used for scoring/fairness evaluation — only removed from the condition matrix.
+    if args.experiment:
+        excluded = {g.strip().upper() for g in args.experiment.split(',')}
+        unknown = excluded - set(groups.keys())
+        if unknown:
+            print(f"  Warning: unknown groups to exclude: {unknown}. Available: {set(groups.keys())}")
+        groups = {k: v for k, v in groups.items() if k not in excluded}
+        print(f"  Excluded groups: {excluded - unknown}")
+
     # Create experimental conditions
     exp_condition = create_exp_conditions(groups)
     print(f"  Conditions: {len(exp_condition)}")
@@ -367,33 +294,32 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
 
     # Build scoring function for k-selection (same logic as single-run mode)
     scoring_fn = None
-    if args.scoring != "silhouette":
-        if args.scoring == "chi2_error":
-            if not error_col:
-                raise ValueError("--error_col required for chi2_error scoring")
-            if args.error_type == 'regression':
-                scoring_fn = make_kruskal_error_scorer(df[error_col].values)
-            else:
-                scoring_fn = make_chi2_error_scorer(df[error_col].values)
-        elif args.scoring == "chi2_sensitive":
-            if not sensitive_cols:
-                raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
-            scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values)
-        elif args.scoring == "composite":
-            if not error_col or not sensitive_cols:
-                raise ValueError("--error_col and --sensitive_cols required for composite scoring")
+    if args.scoring == "chi2_error":
+        if not error_col:
+            raise ValueError("--error_col required for chi2_error scoring")
+        if args.error_type == 'regression':
+            scoring_fn = make_kruskal_error_scorer(df[error_col].values)
+        else:
+            scoring_fn = make_chi2_error_scorer(df[error_col].values)
+    elif args.scoring == "chi2_sensitive":
+        if not sensitive_cols:
+            raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
+        scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values)
+    elif args.scoring == "composite":
+        if error_col or sensitive_cols:
             cw = {}
             for pair in args.composite_weights.split(','):
                 name, w = pair.strip().split(':')
                 cw[name.strip()] = float(w.strip())
             scoring_fn = make_composite_scorer(
-                df[error_col].values,
-                df[sensitive_cols[0]].values,
+                error_data=df[error_col].values if error_col else None,
+                sensitive_data=df[sensitive_cols[0]].values if sensitive_cols else None,
                 silhouette_weight=cw.get('silhouette', 0.3),
                 error_weight=cw.get('error', 0.5),
                 fairness_weight=cw.get('fairness', 0.2),
                 error_type=args.error_type,
             )
+        # else: no error_col or sensitive_cols -> scoring_fn stays None -> silhouette fallback
 
     # Parse feature weights (include sensitive_cols — they are part of clustering)
     all_clustering_cols = regular_cols + sensitive_cols + special_cols
@@ -643,7 +569,7 @@ def main():
             raise ValueError("--error_type regression requires either --error_col or both --y_true_col and --y_pred_col")
 
     # Experiment mode: run all conditions
-    if args.experiment:
+    if args.experiment is not None:
         full_timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
         # Multi-seed experiment mode
@@ -774,58 +700,55 @@ def main():
                                                                                                                                                                                         
     # Build scoring function for k-selection
     scoring_fn = None
-    if args.scoring != "silhouette":
-        # Compute subset mask for scorer (same logic as cluster() uses internally)
-        scorer_mask = None
-        if args.subset and y_true is not None and y_pred is not None:
-            if args.subset == "TP":
-                scorer_mask = (y_true == 1) & (y_pred == 1)
-            elif args.subset == "TN":
-                scorer_mask = (y_true == 0) & (y_pred == 0)
-            elif args.subset == "FP":
-                scorer_mask = (y_true == 0) & (y_pred == 1)
-            elif args.subset == "FN":
-                scorer_mask = (y_true == 1) & (y_pred == 0)
-            elif args.subset == "TP_TN":
-                scorer_mask = y_true == y_pred
-            elif args.subset == "FP_FN":
-                scorer_mask = y_true != y_pred
+    # Compute subset mask for scorer (same logic as cluster() uses internally)
+    scorer_mask = None
+    if args.subset and y_true is not None and y_pred is not None:
+        if args.subset == "TP":
+            scorer_mask = (y_true == 1) & (y_pred == 1)
+        elif args.subset == "TN":
+            scorer_mask = (y_true == 0) & (y_pred == 0)
+        elif args.subset == "FP":
+            scorer_mask = (y_true == 0) & (y_pred == 1)
+        elif args.subset == "FN":
+            scorer_mask = (y_true == 1) & (y_pred == 0)
+        elif args.subset == "TP_TN":
+            scorer_mask = y_true == y_pred
+        elif args.subset == "FP_FN":
+            scorer_mask = y_true != y_pred
 
-        if args.scoring == "chi2_error":
-            if not args.error_col:
-                raise ValueError("--error_col required for chi2_error scoring")
-            if args.error_type == 'regression':
-                scoring_fn = make_kruskal_error_scorer(df[args.error_col].values, mask=scorer_mask)
-            else:
-                scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
-        elif args.scoring == "chi2_sensitive":
-            if not sensitive_cols:
-                raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
-            scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values, mask=scorer_mask)
-        elif args.scoring == "composite":
-            if not args.error_col or not sensitive_cols:
-                raise ValueError("--error_col and --sensitive_cols required for composite scoring")
-            # Parse composite weights
+    if args.scoring == "chi2_error":
+        if not args.error_col:
+            raise ValueError("--error_col required for chi2_error scoring")
+        if args.error_type == 'regression':
+            scoring_fn = make_kruskal_error_scorer(df[args.error_col].values, mask=scorer_mask)
+        else:
+            scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
+    elif args.scoring == "chi2_sensitive":
+        if not sensitive_cols:
+            raise ValueError("--sensitive_cols required for chi2_sensitive scoring")
+        scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values, mask=scorer_mask)
+    elif args.scoring == "composite":
+        if args.error_col or sensitive_cols:
             cw = {}
             for pair in args.composite_weights.split(','):
                 name, w = pair.strip().split(':')
                 cw[name.strip()] = float(w.strip())
             scoring_fn = make_composite_scorer(
-                df[args.error_col].values,
-                df[sensitive_cols[0]].values,
+                error_data=df[args.error_col].values if args.error_col else None,
+                sensitive_data=df[sensitive_cols[0]].values if sensitive_cols else None,
                 mask=scorer_mask,
                 silhouette_weight=cw.get('silhouette', 0.3),
                 error_weight=cw.get('error', 0.5),
                 fairness_weight=cw.get('fairness', 0.2),
                 error_type=args.error_type,
             )
+        # else: no error_col or sensitive_cols -> scoring_fn stays None -> silhouette fallback
 
     # Run clustering
     print(f"\nClustering...")
     print(f"  Algorithm: {args.algorithm}")
     print(f"  Distance: {args.distance}")
-    if args.scoring != "silhouette":
-        print(f"  Scoring: {args.scoring}")
+    print(f"  Scoring: {args.scoring}")
 
     # Validate algorithm + distance combinations
     if args.algorithm == 'kprototypes' and args.distance == 'gower':
