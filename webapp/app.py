@@ -90,7 +90,7 @@ def _run_analysis(job_id, df, params):
             eps            = params.get('eps', 0.5)
             max_iter       = params.get('max_iter', 300)
             min_dp         = params.get('min_datapoints')
-            scoring        = params.get('scoring', 'silhouette')
+            scoring        = params.get('scoring', 'composite')
             experiment     = params.get('experiment', False)
             projection     = params.get('projection', 'tsne')
 
@@ -109,11 +109,13 @@ def _run_analysis(job_id, df, params):
                 scoring_fn = fn(df[error_col].values)
             elif scoring == 'chi2_sensitive' and sensitive_cols:
                 scoring_fn = make_chi2_sensitive_scorer(df[sensitive_cols[0]].values)
-            elif scoring == 'composite' and error_col and sensitive_cols:
-                scoring_fn = make_composite_scorer(
-                    df[error_col].values, df[sensitive_cols[0]].values,
-                    error_type=error_type,
-                )
+            elif scoring == 'composite':
+                if error_col or sensitive_cols:
+                    scoring_fn = make_composite_scorer(
+                        error_data=df[error_col].values if error_col else None,
+                        sensitive_data=df[sensitive_cols[0]].values if sensitive_cols else None,
+                        error_type=error_type,
+                    )
 
             # One-hot encode string/category columns before clustering
             categorical_cols_arg = params.get('categorical_cols', [])
@@ -216,6 +218,7 @@ def _run_single(df, regular_cols, sensitive_cols, special_cols,
             error_col=error_col,
             error_type=error_type,
             feature_matrix=result.feature_matrix,
+            distance_matrix=result.distance_matrix,
         )
         print(f"  Recap     : {len(recap)} cluster rows")
 
