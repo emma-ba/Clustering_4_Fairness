@@ -62,7 +62,7 @@ def _expand_multiclass_cols(data, sensitive_cols):
   return data, expanded_cols
 
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None):
   """
   Create recap of cluster info with error rates and sensitive feature proportions.
 
@@ -95,6 +95,8 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
 
   # MAKE RECAP of cluster info
   # ...with error rates
+  if error_col not in data_result.columns:
+    raise ValueError(f"error_col '{error_col}' not found in data. Available columns: {list(data_result.columns)}")
   res = data_result[['clusters', error_col]]
 
   # ...with cluster size
@@ -133,8 +135,12 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   if(len(recap['clusters'].unique()) > 1):
     # Use scaled feature_matrix if provided (matches the space clustering was done in)
     # Otherwise fall back to raw feature columns (less accurate silhouette)
-    X_for_silhouette = feature_matrix if feature_matrix is not None else data_result[feature_set].values
-    silhouette_val = silhouette_samples(X_for_silhouette, clusters)
+    if distance_matrix is not None:
+      # Gower clustering: use precomputed distance matrix (metric="precomputed")
+      silhouette_val = silhouette_samples(distance_matrix, clusters, metric="precomputed")
+    else:
+      X_for_silhouette = feature_matrix if feature_matrix is not None else data_result[feature_set].values
+      silhouette_val = silhouette_samples(X_for_silhouette, clusters)
 
   for c in recap['clusters']:
     # Get in-cluster data
@@ -398,7 +404,25 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       test_data = test_data.transpose()
       
       if (test_data.sum(axis=1) == 0).any():
-        chi_res['error'].append(np.nan)
+        # Zero row in contingency table — fall back to Kruskal-Wallis on raw error values
+        res_df = results['cond_res'][i]
+        if error_col not in res_df.columns:
+          chi_res['error'].append(np.nan)
+          for col in actual_sensitive:
+            chi_res[col].append(np.nan)
+          continue
+        cluster_labels = res_df['clusters'].values
+        unique_clusters = sorted(set(cluster_labels) - {-1})
+        groups = [res_df.loc[res_df['clusters'] == cl, error_col].values for cl in unique_clusters]
+        groups = [g for g in groups if len(g) > 0]
+        if len(groups) >= 2:
+          try:
+            _, p = kruskal(*groups)
+            chi_res['error'].append(round(p, 6))
+          except ValueError:
+            chi_res['error'].append(np.nan)
+        else:
+          chi_res['error'].append(np.nan)
       else:
         test_res = chi2_contingency(test_data)
         chi_res['error'].append(round(test_res.pvalue, 6))
@@ -454,16 +478,12 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None):
   all_quali['silhouette'] = []
 
   for i in range(0, len(chi_res['cond_name'])):
-    data = results['cond_res'][i]
-    feature_set = exp_condition['feature_set'][i]
-    clusters = data['clusters']
     recap = results['cond_recap'][i]
     if(len(recap['mannwhitney_p']) == 1):
       all_quali['silhouette'].append(np.nan)
       continue
-    silhouette_indiv = silhouette_samples(data[feature_set], clusters)
-    silhouette_avg = silhouette_indiv.mean()
-    all_quali['silhouette'].append(silhouette_avg)
+    # Use silhouette already computed in make_recap (correct metric: precomputed for Gower)
+    all_quali['silhouette'].append(recap['silhouette'].mean())
 
   return(pd.DataFrame(all_quali))
 
@@ -621,7 +641,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
     recap = make_recap(res_df, feature_set,
                        sensitive_cols=sensitive_cols, error_col=error_col,
                        error_type=error_type,
-                       feature_matrix=result.feature_matrix)
+                       feature_matrix=result.feature_matrix,
+                       distance_matrix=result.distance_matrix)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])

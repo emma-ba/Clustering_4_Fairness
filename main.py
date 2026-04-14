@@ -104,14 +104,8 @@ def parse_args():
                         help="Maximum distance between samples for neighborhood (DBSCAN)")
     
     # HDBSCAN parameters
-    # Note: For a general minimum cluster size filter across all algorithms, use --min_datapoints (post-hoc filter).
-    # min_cluster_size is HDBSCAN-specific (built-in parameter controlling hierarchical extraction).
-    
-    parser.add_argument("--min_cluster_size", type=int, default=15,
-                        help="Minimum cluster size (HDBSCAN)")
-    
     parser.add_argument("--min_samples", type=int, default=5,
-                        help="Minimum samples (HDBSCAN)")
+                        help="HDBSCAN/DBSCAN only: minimum samples in a neighborhood for a point to be a core point.")
     # General parameters
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility (used by KMeans, BisectingKMeans, KMedoids, KPrototypes, and experiment mode)")
@@ -160,8 +154,9 @@ def parse_args():
     parser.add_argument("--regular_cols", type=str, default=None, help="Regular features for clustering (comma-separated column names)")     
     # TODO: Cluster plots are too sparse — investigate why the scatter is so spread out. Likely the projection (PCA/t-SNE) is not accounting for the distance metric used; points end up in a low-density Euclidean projection even when clusters are tight in Gower space.
     # TODO: PCA with Gower distance — PCA assumes Euclidean space so it cannot be applied directly to a Gower distance matrix. Investigate kernel PCA or MDS (metric/non-metric) as alternatives that can take a precomputed distance matrix and still give a 2D projection.
-    # TODO: Silhouette score uses Euclidean distance on raw features even when clustering was done with Gower — this is wrong. When distance=gower, silhouette should be computed on the precomputed Gower distance matrix (metric="precomputed"). Fix or flag this inconsistency.
-    # TODO: Kmedoids cluster labels are not sequential (e.g. cluster 0 and 4 instead of 0 and 1) — investigate whether this is a labeling issue post-fit or a result of k-search skipping some cluster counts. Relabel clusters to be contiguous 0..k-1 in output.
+    # DONE: Silhouette score with Gower — now recomputes the Gower matrix on non-noise rows and passes metric="precomputed" to silhouette_score. Previously it used raw Euclidean features, giving wrong results.
+    # DONE: Kmedoids non-sequential labels — after clustering, labels are remapped to contiguous 0..k-1. Previously k-search could produce labels like 0 and 4, skipping 1,2,3.
+    # DONE: KW fallback for chi2 zero-row — when the binary error contingency table has a zero row (e.g. all errors in one cluster), chi2 is undefined. Now falls back to Kruskal-Wallis on raw error values per cluster.
     # TODO: Side-by-side comparison of Euclidean vs Gower clustering results — for the same k, show cluster proportions, error separation (chi2/KW), and sensitive feature distribution per cluster for both distances. Helps assess whether Gower adds value over standard Euclidean.
     # DONE: Exclude groups from experiment condition matrix — --experiment can now take an optional comma-separated list of groups to exclude (e.g. --experiment SPECIAL,ERR). Excluded columns stay available for scoring and fairness evaluation; they're only removed from the clustering feature combinations.
     # TODO: Finish package
@@ -780,9 +775,9 @@ def main():
     print(f"\nResults:")
     print(f"  Clusters: {result.n_clusters}")
     print(f"  Noise: {result.n_noise}")
-    if result.silhouette:
+    if result.silhouette is not None:
         print(f"  Silhouette: {result.silhouette:.3f}")
-    if result.calinski_harabasz:
+    if result.calinski_harabasz is not None:
         print(f"  Calinski-Harabasz: {result.calinski_harabasz:.1f}")
     print(f"  Cluster sizes: {result.cluster_sizes}")
 
@@ -807,7 +802,8 @@ def main():
                            sensitive_cols=sensitive_cols,
                            error_col=args.error_col,
                            error_type=args.error_type,
-                           feature_matrix=result.feature_matrix)
+                           feature_matrix=result.feature_matrix,
+                           distance_matrix=result.distance_matrix)
 
         # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")
