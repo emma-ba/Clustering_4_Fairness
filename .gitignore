@@ -10,3 +10,7 @@ clustering_results/
 __pycache__
 .DS_STORE
 notes/
+*.egg-info/
+dist/
+build/
+c4f/__pycache__/

@@ -4,7 +4,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
-from src.clustering import cluster
+from src.clustering import cluster, gower_distance
 from src.scoring import (
     make_chi2_error_scorer,
     make_kruskal_error_scorer,
@@ -149,12 +149,14 @@ def parse_args():
 
     # Projection method
     parser.add_argument("--projection", type=str, default="tsne",
-                        choices=["pca", "tsne", "none"],
-                        help="Projection method for visualization (use 'none' to skip)")
+                        choices=["pca", "tsne", "mds", "none"],
+                        help="Projection method for visualization. When --distance gower is used, MDS is applied automatically with the precomputed Gower matrix regardless of this flag. Use 'none' to skip.")
 
     parser.add_argument("--regular_cols", type=str, default=None, help="Regular features for clustering (comma-separated column names)")     
-    # TODO: Cluster plots are too sparse — investigate why the scatter is so spread out. Likely the projection (PCA/t-SNE) is not accounting for the distance metric used; points end up in a low-density Euclidean projection even when clusters are tight in Gower space.
-    # TODO: PCA with Gower distance — PCA assumes Euclidean space so it cannot be applied directly to a Gower distance matrix. Investigate kernel PCA or MDS (metric/non-metric) as alternatives that can take a precomputed distance matrix and still give a 2D projection.
+    # DONE: Gower projection — when --distance gower is used, scatter plots now use MDS with the
+    # precomputed Gower distance matrix (metric=precomputed) instead of PCA/t-SNE on raw Euclidean
+    # features. Only non-noise points are projected (the distance matrix only covers them).
+    # In batch/experiment mode the Gower matrix is recomputed per condition for visualization.
     # DONE: Silhouette score with Gower — now recomputes the Gower matrix on non-noise rows and passes metric="precomputed" to silhouette_score. Previously it used raw Euclidean features, giving wrong results.
     # DONE: Kmedoids non-sequential labels — after clustering, labels are remapped to contiguous 0..k-1. Previously k-search could produce labels like 0 and 4, skipping 1,2,3.
     # DONE: KW fallback for chi2 zero-row — when the binary error contingency table has a zero row (e.g. all errors in one cluster), chi2 is undefined. Now falls back to Kruskal-Wallis on raw error values per cluster.
@@ -337,7 +339,6 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         scoring_fn=scoring_fn,
         sensitive_cols=sensitive_cols,
         error_col=error_col,
-        min_cluster_size=args.min_cluster_size,
         min_samples=args.min_samples,
         eps=args.eps,
         min_datapoints=args.min_datapoints,
@@ -410,21 +411,32 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
 
-        # Per-condition cluster scatter plots (tsne/pca)
+        # Per-condition cluster scatter plots
         if args.projection != "none":
             print(f"Generating cluster scatter plots...")
+            cat_names_set_viz = set(categorical_col_names or [])
             for i, cond_name in enumerate(results['cond_name']):
                 res_df = results['cond_res'][i]
                 labels = res_df['clusters'].values
                 feature_set = exp_condition['feature_set'][i]
                 if len(set(labels) - {-1}) > 1:
                     cond_clean = re.sub(r'\s+', '', cond_name)
-                    from sklearn.preprocessing import StandardScaler
-                    X = StandardScaler().fit_transform(res_df[feature_set].values.astype(float))
-                    X_2d = reduce_dimensions(X, method=args.projection)
-                    plot_clusters(X_2d, labels,
-                                  title=f"Clusters ({cond_name})",
-                                  out_path=f"{output_dir}/{cond_clean}_clusters.png")
+                    non_noise = labels != -1
+                    if args.distance == "gower":
+                        # MDS on per-condition Gower matrix (non-noise rows only)
+                        X_raw = res_df[feature_set].values[non_noise].astype(float)
+                        cat_idx = [j for j, c in enumerate(feature_set) if c in cat_names_set_viz] or None
+                        D = gower_distance(X_raw, cat_idx)
+                        X_2d = reduce_dimensions(D, method="mds", precomputed=True)
+                        plot_clusters(X_2d, labels[non_noise],
+                                      title=f"Clusters ({cond_name}, gower+MDS)",
+                                      out_path=f"{output_dir}/{cond_clean}_clusters.png")
+                    else:
+                        X = StandardScaler().fit_transform(res_df[feature_set].values.astype(float))
+                        X_2d = reduce_dimensions(X, method=args.projection)
+                        plot_clusters(X_2d, labels,
+                                      title=f"Clusters ({cond_name})",
+                                      out_path=f"{output_dir}/{cond_clean}_clusters.png")
                     plt.close()
             print(f"Saved: cluster scatter plots")
 
@@ -761,7 +773,6 @@ def main():
         categorical_features=categorical_features if categorical_features else None,
         feature_weights=feature_weights,
         eps=args.eps,
-        min_cluster_size=args.min_cluster_size,
         min_samples=args.min_samples,
         n_clusters=args.n_clusters,
         n_min=args.n_min,
@@ -841,18 +852,24 @@ def main():
         print(f"\nGenerating visualizations ({args.projection})...")
 
         if args.projection != "none":
-            # For mixed-type data (kprototypes or gower), use only numeric columns for projection
-            if categorical_features and (args.algorithm == "kprototypes" or args.distance == "gower"):
-                numeric_mask = [i for i in range(result.feature_matrix.shape[1]) if i not in categorical_features]
-                X_for_viz = result.feature_matrix[:, numeric_mask].astype(float)
+            if args.distance == "gower" and result.distance_matrix is not None:
+                # MDS on precomputed Gower matrix — only non-noise points have a distance entry
+                non_noise = result.labels != -1
+                X_2d = reduce_dimensions(result.distance_matrix, method="mds", precomputed=True)
+                plot_clusters(X_2d, result.labels[non_noise],
+                              title=f"Clusters ({args.algorithm}, gower+MDS)",
+                              out_path=f"{output_dir}/clusters.png")
             else:
-                X_for_viz = result.feature_matrix
-
-            X_2d = reduce_dimensions(X_for_viz, method=args.projection)
-
-            plot_clusters(X_2d, result.labels,
-                        title=f"Clusters ({args.algorithm}, {args.distance})",
-                        out_path=f"{output_dir}/clusters.png")                                                                                                                       
+                # Standard Euclidean projection; drop categorical columns for kprototypes
+                if categorical_features and args.algorithm == "kprototypes":
+                    numeric_mask = [i for i in range(result.feature_matrix.shape[1]) if i not in categorical_features]
+                    X_for_viz = result.feature_matrix[:, numeric_mask].astype(float)
+                else:
+                    X_for_viz = result.feature_matrix
+                X_2d = reduce_dimensions(X_for_viz, method=args.projection)
+                plot_clusters(X_2d, result.labels,
+                              title=f"Clusters ({args.algorithm}, {args.distance})",
+                              out_path=f"{output_dir}/clusters.png")                                                                                                                       
                                                                                                                                                                                         
         # Plot composition for each sensitive attribute                                                                                                                                 
         if sensitive_cols:                                                                                                                                                              
