@@ -161,8 +161,11 @@ def parse_args():
     # DONE: Kmedoids non-sequential labels — after clustering, labels are remapped to contiguous 0..k-1. Previously k-search could produce labels like 0 and 4, skipping 1,2,3.
     # DONE: KW fallback for chi2 zero-row — when the binary error contingency table has a zero row (e.g. all errors in one cluster), chi2 is undefined. Now falls back to Kruskal-Wallis on raw error values per cluster.
     # TODO: Side-by-side comparison of Euclidean vs Gower clustering results — for the same k, show cluster proportions, error separation (chi2/KW), and sensitive feature distribution per cluster for both distances. Helps assess whether Gower adds value over standard Euclidean.
+    # In progress: Finish package
+    # TODO: For mixed data, when is it better to run zhich data. Test by running exp with these 3 options. & try it on a bunch of datasets, such as the ones that we already have for testing purposes. See if we have consistent results & if it depends on the balance between acategorigal & numerical features. 
+    # TODO: Try clustering iteratively.
     # DONE: Exclude groups from experiment condition matrix — --experiment can now take an optional comma-separated list of groups to exclude (e.g. --experiment SPECIAL,ERR). Excluded columns stay available for scoring and fairness evaluation; they're only removed from the clustering feature combinations.
-    # TODO: Finish package
+    
     # TODO: Look into journals that take research artifacts. Or a DEMO at a conference.
     # TODO: Documentation
     # TODO: ACM Badge
@@ -172,7 +175,7 @@ def parse_args():
     # TODO: site web ou on peut uploader le dataset, confirmer les colommes a utilier, sensitives. Penser un peu aux tests qu'on peut applquer.
     # TODO: On peut faire un clustering qui considere +ieurs formes d'erruer. Pour pb de ranking, on a P & Recall - pour + tard.
     # TODO: Look into finding hte number of clusters if it works or not. Should wokr
-    # TODO: Try clustering iteratively.
+    
     # TODO: K-centroid clustering variant - have including the fair-centroid version.
     
     # DONE: Multi-class sensitive features. Extended the pipeline to support sensitive columns with 3+ categories (e.g. race with white/black/hispanic). Encoding is automatic — no user action needed, the tool detects it from the data.
@@ -197,6 +200,8 @@ def parse_args():
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
     # Output
+    parser.add_argument("--no_standardize", action="store_true",
+                        help="Disable automatic standardization of numeric features before clustering. Use this if your data is already normalized.")
     parser.add_argument("--no_plots", action="store_true",
                         help="Skip saving visualization plots")
     parser.add_argument("--output_dir", type=str, default=OUTPUT_DIR,
@@ -345,6 +350,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         error_type=args.error_type,
         feature_weights=feature_weights,
         categorical_col_names=categorical_col_names,
+        standardize=not args.no_standardize,
     )
 
     # Print progress for each condition
@@ -781,6 +787,7 @@ def main():
         random_state=args.seed,
         min_datapoints=args.min_datapoints,
         scoring_fn=scoring_fn,
+        standardize=not args.no_standardize,
     )
 
     # Results

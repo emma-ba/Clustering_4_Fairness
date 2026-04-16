@@ -109,7 +109,8 @@ python main.py --data_path <path> [options]
 | `--distance` | Distance metric: `euclidean` (default), `manhattan`, `gower`. Gower handles mixed types and is required for kmedoids on categorical data |
 | `--n_clusters` | Fixed number of clusters — use this or `--n_min`/`--n_max`, not both |
 | `--n_min` / `--n_max` | Range of k values to try when doing automatic k selection (e.g. `--n_min 2 --n_max 8`) |
-| `--scoring` | Scoring function used to pick the best k: `silhouette` (cluster tightness), `chi2_error` (picks k where error is most unevenly distributed), `chi2_sensitive` (same but for sensitive attributes), `composite` (combination) |
+| `--scoring` | Scoring function used to pick the best k: `silhouette` (cluster tightness), `chi2_error` (picks k where error is most unevenly distributed), `chi2_sensitive` (same but for sensitive attributes), `composite` (combination, default) |
+| `--composite_weights` | Weights for the composite scorer as `component:weight` pairs (default: `silhouette:0.3,error:0.5,fairness:0.2`). Only used when `--scoring composite` |
 | `--feature_weights` | Per-column weights applied before clustering, as `col:weight` pairs e.g. `age:2.0,income:0.5`. Useful to emphasize certain features |
 | `--seed` | Random seed for reproducibility |
 | `--seeds` | Comma-separated list of seeds to run experiment mode multiple times and aggregate (e.g. `42,123,456`) |
@@ -128,6 +129,7 @@ python main.py --data_path <path> [options]
 | `--min_datapoints` | Drop clusters smaller than this threshold before analysis — avoids noisy small clusters |
 | `--separability_check` | Print feature separability test results to the console in addition to saving them |
 | `--projection` | Dimensionality reduction method for the scatter plot: `tsne` (default), `pca`, `mds`, `none`. When `--distance gower` is used, MDS is applied automatically regardless of this flag |
+| `--no_standardize` | Disable automatic standardization of numeric features before clustering. Use this if your data is already normalized |
 | `--no_plots` | Skip generating and saving all visualization plots (recap heatmap, scatter, composition bars) |
 | `--output_dir` | Custom output directory. Default is `clustering_results/<date>/` |
 | `--experiment` | Run in experiment mode: automatically generates all combinations of feature groups (REG, SEN, ERR) and runs each as a separate condition, then produces a comparative summary |

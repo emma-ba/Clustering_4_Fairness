@@ -546,7 +546,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             scoring_fn=None, sensitive_cols=None, error_col='errors',
                             min_cluster_size=15, min_samples=5, eps=0.5,
                             min_datapoints=None, feature_weights=None,
-                            error_type='binary', categorical_col_names=None):
+                            error_type='binary', categorical_col_names=None,
+                            standardize=True):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -627,6 +628,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
         min_datapoints=min_datapoints,
         feature_weights=feature_weights,
         categorical_features=cat_features,
+        standardize=standardize,
     )
 
     # Build result DataFrame: original data + 'clusters' column
