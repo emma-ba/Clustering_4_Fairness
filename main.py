@@ -194,6 +194,8 @@ def parse_args():
                         help="Columns to treat as categorical (comma-separated). String/category dtype columns are detected automatically; use this to force-mark additional columns.")
     parser.add_argument("--error_col", type=str, default=None,
                         help="Error column for analysis. Binary (0/1) for classification, continuous for regression.")
+    parser.add_argument("--error_label", type=str, default=None,
+                        help="Display name for the error column in output tables and heatmaps. Defaults to the value of --error_col.")
     parser.add_argument("--error_type", type=str, default="binary",
                         choices=["binary", "regression"],
                         help="Type of error column: 'binary' (classification 0/1) or 'regression' (continuous). Default: binary")
@@ -253,6 +255,12 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         raise ValueError("At least one feature group (--regular_cols, --sensitive_cols, or --special_cols) is required in experiment mode")
     if not sensitive_cols:
         raise ValueError("--sensitive_cols is required in experiment mode (for proportion analysis)")
+
+    # Preserve original (pre-encoding) sensitive column names for balance_score / entropy
+    original_sensitive_cols = parse_column_list(args.sensitive_cols)
+
+    # Resolve error_label
+    error_label = getattr(args, 'error_label', None) or error_col or 'error'
 
     # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes)
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
@@ -351,6 +359,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         feature_weights=feature_weights,
         categorical_col_names=categorical_col_names,
         standardize=not args.no_standardize,
+        error_label=error_label,
+        original_sensitive_cols=original_sensitive_cols,
     )
 
     # Print progress for each condition
@@ -364,24 +374,29 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
 
     # Generate chi-squared / Kruskal-Wallis test results
     chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols,
-                             error_type=args.error_type, error_col=error_col)
+                             error_type=args.error_type, error_col=error_col,
+                             error_label=error_label)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
     # Print chi-squared results summary
     # Use actual sensitive columns from chi_res (may be expanded for multi-class)
-    actual_sensitive_cols = [c for c in chi_res.columns if c not in ('cond_descr', 'cond_name', 'error')]
+    skip_meta = {'cond_descr', 'cond_name', error_label}
+    actual_sensitive_cols = [c for c in chi_res.columns if c not in skip_meta]
     print("\nChi-squared test results:")
-    chi_display_cols = ['cond_name', 'error'] + actual_sensitive_cols
+    chi_display_cols = ['cond_name', error_label] + actual_sensitive_cols
     chi_display = chi_res[chi_display_cols].copy()
-    chi_display.columns = ['Condition', 'error'] + actual_sensitive_cols
+    chi_display.columns = ['Condition', error_label] + actual_sensitive_cols
     print(chi_display.to_string(index=False))
 
     # Generate quality metrics
-    all_quali = recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=sensitive_cols)
+    all_quali = recap_quali_metrics(chi_res, results, exp_condition,
+                                    sensitive_cols=sensitive_cols,
+                                    original_sensitive_cols=original_sensitive_cols,
+                                    error_label=error_label)
 
     # Create chi-squared heatmap visualization
-    chi_viz_cols = ['error'] + actual_sensitive_cols
+    chi_viz_cols = [error_label] + actual_sensitive_cols
     chi_res_viz = chi_res[chi_viz_cols].copy()
     chi_res_viz.index = chi_res['cond_name'].str.strip()
 
@@ -399,11 +414,12 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     print(f"Saved: chi_res_heatmap.png")
 
     # Create quality metrics heatmap
-    quali_viz_cols = ['error'] + actual_sensitive_cols + ['silhouette']
+    skip_meta_quali = {'cond_descr', 'cond_name'}
+    quali_viz_cols = [c for c in all_quali.columns if c not in skip_meta_quali]
     all_quali_viz = all_quali[quali_viz_cols].copy()
     all_quali_viz.index = all_quali['cond_name'].str.strip()
     plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png",
-                         figsize=(max(4, len(quali_viz_cols) + 2), max(6, len(all_quali_viz) * 0.6)))
+                         error_label=error_label)
     plt.close()
     print(f"Saved: all_quali_heatmap.png")
 
@@ -428,7 +444,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                 if len(set(labels) - {-1}) > 1:
                     cond_clean = re.sub(r'\s+', '', cond_name)
                     non_noise = labels != -1
-                    if args.distance == "gower":
+                    if args.distance == "gower" and args.projection == "mds":
                         # MDS on per-condition Gower matrix (non-noise rows only)
                         X_raw = res_df[feature_set].values[non_noise].astype(float)
                         cat_idx = [j for j, c in enumerate(feature_set) if c in cat_names_set_viz] or None
@@ -438,9 +454,10 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                                       title=f"Clusters ({cond_name}, gower+MDS)",
                                       out_path=f"{output_dir}/{cond_clean}_clusters.png")
                     else:
-                        X = StandardScaler().fit_transform(res_df[feature_set].values.astype(float))
+                        X_vals = res_df[feature_set].values[non_noise].astype(float)
+                        X = StandardScaler().fit_transform(X_vals)
                         X_2d = reduce_dimensions(X, method=args.projection)
-                        plot_clusters(X_2d, labels,
+                        plot_clusters(X_2d, labels[non_noise],
                                       title=f"Clusters ({cond_name})",
                                       out_path=f"{output_dir}/{cond_clean}_clusters.png")
                     plt.close()
@@ -461,26 +478,74 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
 
     # --- CSV outputs ---
 
-    # Global summary CSV: one row per condition, one primary assessment metric (KW p-value for error)
-    # Metadata columns prepended so the file is self-contained for analysis
+    # Global summary CSV: one row per condition
+    # 'condition' column (renamed from cond_descr) is always first
     summary_rows = []
     chi_res_lookup = chi_res.set_index('cond_name') if chi_res is not None else None
+    all_quali_lookup = all_quali.set_index('cond_name') if all_quali is not None else None
     for i, cond_name in enumerate(results['cond_name']):
         recap = results['cond_recap'][i]
-        kw_p = chi_res_lookup.loc[cond_name, 'error'] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
-        row = {} if metadata is None else dict(metadata)
-        row.update({
-            'cond_name': cond_name,
-            'cond_descr': results['cond_descr'][i],
-            'n_clusters': len(recap),
-            'kw_p_error': round(kw_p, 4) if not np.isnan(kw_p) else np.nan,
-            'silhouette_avg': round(recap['silhouette'].mean(), 4) if 'silhouette' in recap.columns else np.nan,
-            'error_rate_avg': round(recap['error_rate'].mean(), 4) if 'error_rate' in recap.columns else np.nan,
-            'error_mean_avg': round(recap['error_mean'].mean(), 4) if 'error_mean' in recap.columns else np.nan,
-            'abs_error_mean_avg': round(recap['abs_error_mean'].mean(), 4) if 'abs_error_mean' in recap.columns else np.nan,
-        })
+        kw_p = chi_res_lookup.loc[cond_name, error_label] if (
+            chi_res_lookup is not None and cond_name in chi_res_lookup.index
+        ) else np.nan
+
+        # Error rate / mean columns (may be renamed via error_label)
+        err_rate_col = f'{error_label}_rate' if f'{error_label}_rate' in recap.columns else 'error_rate' if 'error_rate' in recap.columns else None
+        err_mean_col = f'{error_label}_mean' if f'{error_label}_mean' in recap.columns else 'error_mean' if 'error_mean' in recap.columns else None
+        abs_err_col  = f'abs_{error_label}_mean' if f'abs_{error_label}_mean' in recap.columns else 'abs_error_mean' if 'abs_error_mean' in recap.columns else None
+
+        def _safe_stat(series, fn):
+            try:
+                v = fn(series.dropna())
+                return round(v, 4) if not np.isnan(v) else np.nan
+            except Exception:
+                return np.nan
+
+        row = {'condition': results['cond_descr'][i]}
+        if metadata:
+            row.update(metadata)
+        row['cond_name'] = cond_name
+
+        row['n_clusters'] = len(recap)
+        row[f'kw_p_{error_label}'] = round(kw_p, 4) if not np.isnan(kw_p) else np.nan
+        row['silhouette_avg'] = _safe_stat(recap['silhouette'], np.mean) if 'silhouette' in recap.columns else np.nan
+
+        # Error stats (min, max, max_diff)
+        if err_rate_col and err_rate_col in recap.columns:
+            s = recap[err_rate_col]
+            row[f'{error_label}_avg'] = _safe_stat(s, np.mean)
+            row[f'{error_label}_min'] = _safe_stat(s, np.min)
+            row[f'{error_label}_max'] = _safe_stat(s, np.max)
+            row[f'{error_label}_max_diff'] = round(s.max() - s.min(), 4) if not s.isna().all() else np.nan
+        elif err_mean_col and err_mean_col in recap.columns:
+            s = recap[err_mean_col]
+            row[f'{error_label}_avg'] = _safe_stat(s, np.mean)
+            row[f'{error_label}_min'] = _safe_stat(s, np.min)
+            row[f'{error_label}_max'] = _safe_stat(s, np.max)
+            row[f'{error_label}_max_diff'] = round(s.max() - s.min(), 4) if not s.isna().all() else np.nan
+        if abs_err_col and abs_err_col in recap.columns:
+            row[f'abs_{error_label}_avg'] = _safe_stat(recap[abs_err_col], np.mean)
+
+        # diff_vs_rest stats
+        if 'diff_vs_rest' in recap.columns:
+            dvr = recap['diff_vs_rest']
+            row['diff_vs_rest_min'] = _safe_stat(dvr, np.min)
+            row['diff_vs_rest_max'] = _safe_stat(dvr, np.max)
+            row['diff_vs_rest_max_diff'] = round(dvr.max() - dvr.min(), 4) if not dvr.isna().all() else np.nan
+
+        # Balance scores per original sensitive col
+        if all_quali_lookup is not None and cond_name in all_quali_lookup.index:
+            for col in original_sensitive_cols:
+                bal_key = f'balance_{col}'
+                if bal_key in all_quali_lookup.columns:
+                    row[bal_key] = all_quali_lookup.loc[cond_name, bal_key]
+
         summary_rows.append(row)
+
     summary_df = pd.DataFrame(summary_rows)
+    # Ensure 'condition' is the first column
+    front_cols = ['condition'] + [c for c in summary_df.columns if c != 'condition']
+    summary_df = summary_df[front_cols]
     summary_df.to_csv(f"{output_dir}/results_summary.csv", index=False)
     print(f"\nSaved: results_summary.csv")
 
@@ -499,10 +564,17 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         recap_i = results['cond_recap'][i].copy()
 
         # Add rule: most distinctive sensitive feature per cluster (highest abs _diff)
-        diff_cols = [c for c in recap_i.columns if c.endswith('_diff')]
+        # Exclude diff_vs_rest and _max_prop_diff (aggregate stats, not per-group diffs)
+        diff_cols = [c for c in recap_i.columns
+                     if c.endswith('_diff') and c != 'diff_vs_rest' and not c.endswith('_max_prop_diff')]
         if diff_cols:
             def _make_rule(row):
-                best_col = row[diff_cols].abs().idxmax()
+                vals = row[diff_cols].abs()
+                if vals.isna().all():
+                    return ''
+                best_col = vals.idxmax()
+                if pd.isna(best_col):
+                    return ''
                 best_val = row[best_col]
                 feature = best_col.replace('_diff', '')
                 direction = '+' if best_val > 0 else ''
@@ -512,10 +584,10 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
             recap_i.insert(1, 'rule', '')
 
         # Add OVERALL row with Kruskal-Wallis stat test
-        kw_p = chi_res_lookup.loc[cond_name, 'error'] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
+        kw_p = chi_res_lookup.loc[cond_name, error_label] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
         overall_row = {col: '' for col in recap_i.columns}
         overall_row['c'] = 'OVERALL'
-        overall_row['rule'] = f"kruskallwallis_p (error): {round(kw_p, 4) if not np.isnan(kw_p) else 'n/a'}"
+        overall_row['rule'] = f"kruskallwallis_p ({error_label}): {round(kw_p, 4) if not np.isnan(kw_p) else 'n/a'}"
         recap_i = pd.concat([recap_i, pd.DataFrame([overall_row])], ignore_index=True)
 
         # Append separability test results (feature-level stat tests across clusters)
@@ -534,7 +606,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     print(f"Saved: {len(results['cond_name'])} per-condition CSVs")
 
     print(f"\nAll outputs saved to: {output_dir}/")
-    print("  - results_summary.csv (global: 1 row per condition, kw_p_error as key metric)")
+    print(f"  - results_summary.csv (global: 1 row per condition, kw_p_{error_label} as key metric)")
     print(f"  - {len(results['cond_name'])} per-condition CSVs (1 row per cluster + OVERALL stat test)")
     print("  - chi_res.csv / chi_res_heatmap.png")
     print("  - all_quali_heatmap.png")

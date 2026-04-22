@@ -14,18 +14,21 @@ from typing import Callable, Optional
 from sklearn.metrics import silhouette_score
 from scipy.stats import chi2_contingency, kruskal
 
-# Type alias: takes (X, labels) -> float, higher = better
 ScoringFn = Callable[[np.ndarray, np.ndarray], float]
 
-
 def silhouette_scorer(X: np.ndarray, labels: np.ndarray) -> float:
-    """Standard silhouette score. Higher = better cluster quality."""
+    """Standard silhouette score. Handles raw features and precomputed distance matrices."""
     n_clusters = len(set(labels) - {-1})
     if n_clusters < 2:
         return -1.0
     non_noise = labels != -1
     if non_noise.sum() <= n_clusters:
         return -1.0
+    # Detect precomputed distance matrix: square, same size as labels, all non-negative
+    if (X.ndim == 2 and X.shape[0] == X.shape[1] and X.shape[0] == len(labels)
+            and (X >= 0).all()):
+        X_sub = X[np.ix_(non_noise, non_noise)]
+        return silhouette_score(X_sub, labels[non_noise], metric="precomputed")
     return silhouette_score(X[non_noise], labels[non_noise])
 
 

@@ -10,7 +10,9 @@ This module provides functions for:
 
 import numpy as np
 import pandas as pd
+import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import seaborn as sns
 import re
 from sklearn.metrics import silhouette_samples
@@ -18,6 +20,7 @@ from scipy import stats
 from scipy.stats import chi2_contingency, kruskal, mannwhitneyu
 from itertools import combinations
 from .clustering import cluster
+from .fairness_metrics import compute_entropy, compute_balance_score
 
 
 # =============================================================================
@@ -62,7 +65,7 @@ def _expand_multiclass_cols(data, sensitive_cols):
   return data, expanded_cols
 
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, original_sensitive_cols=None, error_label=None):
   """
   Create recap of cluster info with error rates and sensitive feature proportions.
 
@@ -126,7 +129,10 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   diff_p = []
 
   # Dynamic sensitive column tracking (using expanded columns for multi-class support)
-  sensitive_data = {col: {'prop': [], 'diff': [], 'p': []} for col in sensitive_cols_expanded}
+  sensitive_data = {col: {'prop': [], 'diff': [], 'p': [], 'repr_ratio': []} for col in sensitive_cols_expanded}
+
+  # Overall rate per expanded col — needed for representation ratio computation
+  overall_rates = {col: data_result[col].mean() for col in sensitive_cols_expanded}
 
   silhouette = []
 
@@ -157,6 +163,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         sensitive_data[col]['prop'].append(np.nan)
         sensitive_data[col]['diff'].append(np.nan)
         sensitive_data[col]['p'].append(np.nan)
+        sensitive_data[col]['repr_ratio'].append(np.nan)
       silhouette.append(np.nan)
       break
 
@@ -202,6 +209,10 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
 
       sensitive_data[col]['prop'].append(c_prop)
       sensitive_data[col]['diff'].append(c_prop - rest_prop)
+      overall_rate = overall_rates[col]
+      sensitive_data[col]['repr_ratio'].append(
+          round(c_prop / overall_rate, 4) if overall_rate > 0 else np.nan
+      )
 
       # Poisson means test (handle zero counts)
       if (c_n < 1) or (c_count < 1) or (rest_n < 1) or (rest_count < 1):
@@ -211,15 +222,51 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         res = stats.poisson_means_test(c_n, c_count, rest_n, rest_count)
         sensitive_data[col]['p'].append(round(res.pvalue, 3))
 
-  recap['diff_vs_rest'] = np.around(diff_vs_rest, 3)
-  recap['mannwhitney_p'] = diff_p
+  # Collect all new columns into a dict then concat once to avoid fragmentation
+  new_cols = {
+      'diff_vs_rest': np.around(diff_vs_rest, 3),
+      'mannwhitney_p': diff_p,
+  }
 
   for col in sensitive_cols_expanded:
-    recap[f'{col}_prop'] = np.around(sensitive_data[col]['prop'], 3)
-    recap[f'{col}_diff'] = np.around(sensitive_data[col]['diff'], 3)
-    recap[f'{col}_p'] = sensitive_data[col]['p']
+    new_cols[f'{col}_prop'] = np.around(sensitive_data[col]['prop'], 3)
+    new_cols[f'{col}_diff'] = np.around(sensitive_data[col]['diff'], 3)
+    new_cols[f'{col}_p'] = sensitive_data[col]['p']
+    new_cols[f'{col}_repr_ratio'] = sensitive_data[col]['repr_ratio']
 
-  recap['silhouette'] = silhouette
+  # Entropy, max_prop_diff, and max_repr_ratio per original sensitive column
+  orig_cols = original_sensitive_cols if original_sensitive_cols is not None else (sensitive_cols or [])
+  for orig_col in orig_cols:
+    expanded = [c for c in sensitive_cols_expanded if c == orig_col or c.startswith(f'{orig_col}=') or c.startswith(f'{orig_col}_')]
+    if not expanded:
+      continue
+    entropy_vals = []
+    max_prop_diff_vals = []
+    max_repr_ratio_vals = []
+    for c_idx in range(len(recap['clusters'])):
+      props = [sensitive_data[exp]['prop'][c_idx] for exp in expanded if exp in sensitive_data]
+      ratios = [sensitive_data[exp]['repr_ratio'][c_idx] for exp in expanded if exp in sensitive_data]
+      if not props or any(np.isnan(p) for p in props):
+        entropy_vals.append(np.nan)
+        max_prop_diff_vals.append(np.nan)
+        max_repr_ratio_vals.append(np.nan)
+        continue
+      props_arr = np.array(props, dtype=float)
+      if len(props_arr) == 1:
+        p = props_arr[0]
+        props_arr = np.array([p, 1.0 - p])
+      entropy_vals.append(round(compute_entropy(props_arr), 4))
+      max_prop_diff_vals.append(round(float(np.max(props_arr) - np.min(props_arr)), 4))
+      valid_ratios = [r for r in ratios if not np.isnan(r)]
+      max_repr_ratio_vals.append(round(max(valid_ratios), 4) if valid_ratios else np.nan)
+    new_cols[f'{orig_col}_entropy'] = entropy_vals
+    if len(expanded) > 1:
+      new_cols[f'{orig_col}_max_prop_diff'] = max_prop_diff_vals
+      new_cols[f'{orig_col}_max_repr_ratio'] = max_repr_ratio_vals
+
+  new_cols['silhouette'] = silhouette
+
+  recap = pd.concat([recap, pd.DataFrame(new_cols, index=recap.index)], axis=1)
 
   if error_type == 'regression':
     recap['error_mean'] = np.around(recap['error_mean'], 3)
@@ -228,12 +275,23 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     recap['abs_error_mean'] = np.around(recap['abs_error_mean'], 3)
     recap['abs_error_median'] = np.around(recap['abs_error_median'], 3)
   else:
-    recap['error_rate'] = np.around(recap['error_rate'] , 3)
+    recap['error_rate'] = np.around(recap['error_rate'], 3)
 
   recap = recap.reset_index(drop=True)
-  recap.rename(columns={'clusters':'c'}, inplace=True)
+  recap.rename(columns={'clusters': 'c'}, inplace=True)
 
-  return(recap)
+  # Rename error columns after all processing is done
+  if error_label is not None:
+    rename_map = {}
+    for src in ['error_rate', 'error_mean', 'error_std', 'error_median',
+                'abs_error_mean', 'abs_error_median']:
+      if src in recap.columns:
+        new_name = src.replace('error', error_label, 1)
+        rename_map[src] = new_name
+    if rename_map:
+      recap = recap.rename(columns=rename_map)
+
+  return recap
 
 
 # =============================================================================
@@ -332,7 +390,7 @@ def _get_sensitive_cols_from_recap(recap, sensitive_cols):
   return actual_cols
 
 
-def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors'):
+def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', error_label=None):
   """
   Run chi-squared / Kruskal-Wallis tests on cluster recaps for error and sensitive columns.
 
@@ -353,9 +411,13 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       'binary' for chi-squared on error counts, 'regression' for Kruskal-Wallis on raw errors.
   error_col : str
       Name of the error column in the data. Used for regression path.
+  error_label : str, optional
+      Display name for the error column in output tables. Defaults to 'error'.
   """
   if sensitive_cols is None:
     sensitive_cols = []
+  if error_label is None:
+    error_label = 'error'
 
   # Determine actual columns from first recap
   if len(results['cond_recap']) > 0:
@@ -365,7 +427,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 
   chi_res = {'cond_descr': [],
             'cond_name': [],
-            'error': []}
+            error_label: []}
   for col in actual_sensitive:
     chi_res[col] = []
 
@@ -375,7 +437,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
     recap = results['cond_recap'][i]
 
     if(len(recap['mannwhitney_p']) == 1):
-      chi_res['error'].append(np.nan)
+      chi_res[error_label].append(np.nan)
       for col in actual_sensitive:
         chi_res[col].append(np.nan)
       continue
@@ -391,11 +453,11 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       if len(groups) >= 2:
         try:
           _, p = kruskal(*groups)
-          chi_res['error'].append(round(p, 6))
+          chi_res[error_label].append(round(p, 6))
         except ValueError:
-          chi_res['error'].append(np.nan)
+          chi_res[error_label].append(np.nan)
       else:
-        chi_res['error'].append(np.nan)
+        chi_res[error_label].append(np.nan)
     else:
       # Binary: chi-squared on [n_correct, n_error] contingency table
       test_data = recap[['count', 'n_error']].copy(deep=True)
@@ -407,7 +469,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
         # Zero row in contingency table — fall back to Kruskal-Wallis on raw error values
         res_df = results['cond_res'][i]
         if error_col not in res_df.columns:
-          chi_res['error'].append(np.nan)
+          chi_res[error_label].append(np.nan)
           for col in actual_sensitive:
             chi_res[col].append(np.nan)
           continue
@@ -418,14 +480,14 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
         if len(groups) >= 2:
           try:
             _, p = kruskal(*groups)
-            chi_res['error'].append(round(p, 6))
+            chi_res[error_label].append(round(p, 6))
           except ValueError:
-            chi_res['error'].append(np.nan)
+            chi_res[error_label].append(np.nan)
         else:
-          chi_res['error'].append(np.nan)
+          chi_res[error_label].append(np.nan)
       else:
         test_res = chi2_contingency(test_data)
-        chi_res['error'].append(round(test_res.pvalue, 6))
+        chi_res[error_label].append(round(test_res.pvalue, 6))
 
     # Test each sensitive column (binary: 2x2 table, multi-class indicators: 2xN each)
     for col in actual_sensitive:
@@ -449,9 +511,9 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 # Utils for Results - All Quality Metrics
 # =============================================================================
 
-def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None):
+def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None):
   """
-  Combine chi-squared results with silhouette scores.
+  Combine chi-squared results with silhouette scores, entropy, and balance scores.
 
   Parameters
   ----------
@@ -464,76 +526,261 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None):
   sensitive_cols : list, optional
       Original sensitive column names. Actual columns used are inferred from
       chi_res (which may contain expanded multi-class indicator names).
+  original_sensitive_cols : list, optional
+      Pre-encoding sensitive column names (used for balance_score and entropy_avg).
+  error_label : str, optional
+      Display name for the error column (used as key in chi_res).
   """
+  if error_label is None:
+    error_label = 'error'
+
   # Use whatever sensitive columns are actually in chi_res
-  # (may be expanded multi-class names like 'race=0', 'race=1')
-  skip_cols = {'cond_descr', 'cond_name', 'error'}
+  skip_cols = {'cond_descr', 'cond_name', error_label}
   actual_sensitive = [c for c in chi_res.columns if c not in skip_cols]
 
   all_quali = {'cond_descr': chi_res['cond_descr'],
-            'cond_name': chi_res['cond_name'],
-            'error': chi_res['error']}
+               'cond_name': chi_res['cond_name'],
+               error_label: chi_res[error_label]}
   for col in actual_sensitive:
     all_quali[col] = chi_res[col]
   all_quali['silhouette'] = []
 
+  # Prepare columns for per-original-col fairness metrics
+  orig_cols = original_sensitive_cols or sensitive_cols or []
+  for col in orig_cols:
+    all_quali[f'{col}_overall_entropy'] = []
+    all_quali[f'{col}_entropy_avg'] = []
+    all_quali[f'{col}_repr_ratio_avg'] = []
+    all_quali[f'balance_{col}'] = []
+
   for i in range(0, len(chi_res['cond_name'])):
     recap = results['cond_recap'][i]
-    if(len(recap['mannwhitney_p']) == 1):
+    res_df = results['cond_res'][i]
+    single_cluster = len(recap['mannwhitney_p']) == 1
+
+    if single_cluster:
       all_quali['silhouette'].append(np.nan)
+      for col in orig_cols:
+        all_quali[f'{col}_overall_entropy'].append(np.nan)
+        all_quali[f'{col}_entropy_avg'].append(np.nan)
+        all_quali[f'{col}_repr_ratio_avg'].append(np.nan)
+        all_quali[f'balance_{col}'].append(np.nan)
       continue
-    # Use silhouette already computed in make_recap (correct metric: precomputed for Gower)
+
+    # Silhouette: already computed in make_recap
     all_quali['silhouette'].append(recap['silhouette'].mean())
 
-  return(pd.DataFrame(all_quali))
+    labels = res_df['clusters'].values
+    for col in orig_cols:
+      # Overall entropy: entropy of the population distribution for this col
+      try:
+        if col in res_df.columns:
+          vals = sorted(res_df[col].dropna().unique())
+          props_overall = np.array([(res_df[col] == v).mean() for v in vals], dtype=float)
+        else:
+          expanded_oe = [c for c in res_df.columns
+                         if c.startswith(f'{col}=') or c.startswith(f'{col}_')]
+          props_overall = np.array([res_df[c].mean() for c in expanded_oe], dtype=float) if expanded_oe else np.array([])
+        all_quali[f'{col}_overall_entropy'].append(
+            round(compute_entropy(props_overall), 4) if len(props_overall) > 0 else np.nan
+        )
+      except Exception:
+        all_quali[f'{col}_overall_entropy'].append(np.nan)
+
+      # Entropy avg from recap (per-cluster entropy averaged across clusters)
+      entropy_col = f'{col}_entropy'
+      if entropy_col in recap.columns:
+        all_quali[f'{col}_entropy_avg'].append(round(recap[entropy_col].mean(), 4))
+      else:
+        all_quali[f'{col}_entropy_avg'].append(np.nan)
+
+      # Repr ratio avg: average of max_repr_ratio across clusters (multi-class)
+      # or average of repr_ratio for binary cols
+      repr_col = f'{col}_max_repr_ratio' if f'{col}_max_repr_ratio' in recap.columns else f'{col}_repr_ratio' if f'{col}_repr_ratio' in recap.columns else None
+      if repr_col:
+        all_quali[f'{col}_repr_ratio_avg'].append(round(recap[repr_col].mean(), 4))
+      else:
+        all_quali[f'{col}_repr_ratio_avg'].append(np.nan)
+
+      # Balance score from raw data
+      try:
+        if col in res_df.columns:
+          attribute = res_df[col].values
+        else:
+          expanded_bs = [c for c in res_df.columns
+                         if c.startswith(f'{col}=') or c.startswith(f'{col}_')]
+          if expanded_bs:
+            attribute = res_df[expanded_bs].values.argmax(axis=1)
+          else:
+            raise KeyError(col)
+        bs = compute_balance_score(labels, attribute)
+        all_quali[f'balance_{col}'].append(round(bs, 4))
+      except Exception:
+        all_quali[f'balance_{col}'].append(np.nan)
+
+  return pd.DataFrame(all_quali)
 
 
 # =============================================================================
 # Visualization
 # =============================================================================
 
-def plot_quality_heatmap(all_quali_viz, output_path, figsize=(4,4)):
+def plot_quality_heatmap(all_quali_viz, output_path, figsize=None, error_label='error'):
   """
-  Plot quality metrics heatmap.
+  Plot quality metrics heatmap with color-coded column groups.
 
-  For silhouette, higher=better, so color should be inverse (blue instead of red).
+  - Error column (error_label): Reds_r  (lower p = more significant = redder)
+  - Sensitive p-value columns: Greens_r
+  - Silhouette: Blues              (higher = better = darker blue)
+  - Balance/entropy columns: Greens
   """
-  plt.figure(figsize=figsize)
-  ax = sns.heatmap(all_quali_viz, annot=True, center=0, cbar=False,
-                  cmap=sns.color_palette("vlag", as_cmap=True), robust=True)
-  ax.set(xlabel="", ylabel="")
-  ax.xaxis.tick_top()
-  ax.tick_params(axis='x', which='major', length=0)
-  ax.tick_params(axis='y', which='major', pad=150, length=0)
-  plt.yticks(ha='left')
+  df = all_quali_viz.copy()
+
+  # Classify columns
+  error_cols = [c for c in df.columns if c == error_label]
+  sil_cols = [c for c in df.columns if c == 'silhouette']
+  green_pos_cols = [c for c in df.columns if c.startswith('balance_') or c.endswith('_entropy_avg')
+                   or c.endswith('_overall_entropy') or c.endswith('_repr_ratio_avg')]
+  sensitive_cols = [c for c in df.columns if c not in error_cols + sil_cols + green_pos_cols]
+
+  groups = []
+  if error_cols:
+    groups.append((error_cols, 'Reds_r', None, None))
+  if sensitive_cols:
+    groups.append((sensitive_cols, 'Greens_r', None, None))
+  if green_pos_cols:
+    groups.append((green_pos_cols, 'Greens', None, None))
+  if sil_cols:
+    groups.append((sil_cols, 'Blues', None, None))
+
+  if not groups:
+    return
+
+  n_groups = len(groups)
+  col_counts = [len(g[0]) for g in groups]
+  total_cols = sum(col_counts)
+
+  if figsize is None:
+    n_rows = len(df)
+    figsize = (max(6, total_cols * 1.2), max(4, n_rows * 0.6))
+
+  fig, axes = plt.subplots(1, n_groups, figsize=figsize,
+                           gridspec_kw={'width_ratios': col_counts})
+  if n_groups == 1:
+    axes = [axes]
+
+  for ax, (cols, cmap, vmin, vmax) in zip(axes, groups):
+    kw = dict(annot=True, fmt='.4g', cbar=False, ax=ax, robust=True)
+    if vmin is not None:
+      kw.update(vmin=vmin, vmax=vmax)
+      kw.pop('robust')
+    sns.heatmap(df[cols], cmap=cmap, **kw)
+    ax.xaxis.tick_top()
+    ax.tick_params(axis='x', which='major', length=0, rotation=45)
+    ax.tick_params(axis='y', which='major', length=0)
+    ax.set_xticklabels(ax.get_xticklabels(), ha='left', rotation=45, rotation_mode='anchor')
+    ax.set(xlabel='', ylabel='')
+
+  # Only show y-tick labels on the first subplot
+  for ax in axes[1:]:
+    ax.set_yticklabels([])
+
+  plt.tight_layout()
   plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0)
 
 
 def plot_cluster_recap_heatmap(recap, cond_name, output_dir):
-  """Plot one-vs-all cluster comparison heatmap."""
+  """Plot one-vs-all cluster comparison heatmap with color-coded column groups."""
   recap = recap.sort_values(by=['diff_vs_rest'], ascending=False)
-  recap['count'] = recap['count']/recap['count'].sum()
+  recap = recap.copy()
+  recap['count'] = recap['count'] / recap['count'].sum()
   recap = recap.rename(columns={"count": "size_prop"})
   drop_cols = ['c']
   if 'n_error' in recap.columns:
     drop_cols.append('n_error')
   recap = recap.drop(drop_cols, axis=1)
 
-  n_cols = len(recap.columns)
+  # Custom black→white→blue colormap for *_diff columns (neg=black, zero=white, pos=blue)
+  bwb_cmap = mcolors.LinearSegmentedColormap.from_list(
+      'bwb', [(0.0, 'black'), (0.5, 'white'), (1.0, '#1f77b4')]
+  )
+
+  cols = list(recap.columns)
+
+  # Classify columns into groups (order matters for display)
+  error_rate_cols = [c for c in cols if c.endswith('_rate') or c.endswith('_mean')]
+  mw_cols = [c for c in cols if c == 'mannwhitney_p']
+  dvr_cols = [c for c in cols if c == 'diff_vs_rest']
+  prop_cols = [c for c in cols if c.endswith('_prop') and c != 'size_prop']
+  repr_ratio_cols = [c for c in cols if c.endswith('_repr_ratio') or c.endswith('_max_repr_ratio')]
+  entropy_cols = [c for c in cols if c.endswith('_entropy')]
+  max_prop_diff_cols = [c for c in cols if c.endswith('_max_prop_diff')]
+  # Exclude _max_prop_diff and _repr_ratio cols (they end in _diff/_ratio but belong in Greens)
+  diff_cols = [c for c in cols if c.endswith('_diff') and c not in dvr_cols and c not in max_prop_diff_cols]
+  p_cols = [c for c in cols if c.endswith('_p') and c not in mw_cols]
+  sil_cols = [c for c in cols if c == 'silhouette']
+  size_cols = [c for c in cols if c == 'size_prop']
+  # Anything else (regression error stats)
+  other_cols = [c for c in cols if c not in (
+      error_rate_cols + mw_cols + dvr_cols + prop_cols + repr_ratio_cols + entropy_cols +
+      max_prop_diff_cols + diff_cols + p_cols + sil_cols + size_cols
+  )]
+
+  groups = []
+  if error_rate_cols + mw_cols:
+    groups.append((error_rate_cols + mw_cols, 'Reds', None, None, '.3g'))
+  if dvr_cols:
+    groups.append((dvr_cols, 'Blues', None, None, '.3g'))
+  if prop_cols + repr_ratio_cols + entropy_cols + max_prop_diff_cols:
+    groups.append((prop_cols + repr_ratio_cols + entropy_cols + max_prop_diff_cols, 'Greens', None, None, '.3g'))
+  if diff_cols:
+    groups.append((diff_cols, bwb_cmap, -1.0, 1.0, '.3g'))
+  if p_cols:
+    groups.append((p_cols, 'Greens_r', None, None, '.3g'))
+  if sil_cols:
+    groups.append((sil_cols, 'Blues', None, None, '.3g'))
+  if size_cols:
+    groups.append((size_cols, 'Greys', None, None, '.3g'))
+  if other_cols:
+    groups.append((other_cols, 'vlag', None, None, '.3g'))
+
+  # Filter out empty groups and groups where columns aren't in recap
+  groups = [(c, cmap, vmin, vmax, fmt) for c, cmap, vmin, vmax, fmt in groups
+             if c and all(col in recap.columns for col in c)]
+
+  if not groups:
+    return
+
+  col_counts = [len(g[0]) for g in groups]
   n_rows = len(recap)
-  fig_width = max(10, n_cols * 0.9)
+  fig_width = max(10, sum(col_counts) * 0.9)
   fig_height = max(4, n_rows * 1.2)
-  plt.figure(figsize=(fig_width, fig_height))
-  ax = sns.heatmap(recap, annot=True, fmt='.3g', center=0, cbar=False,
-                   cmap=sns.color_palette("vlag", as_cmap=True), robust=True)
-  ax.set_title(re.sub(' +', ' ', cond_name))
-  ax.xaxis.tick_top()
-  ax.set(xlabel="", ylabel="")
-  ax.tick_params(axis='x', which='major', length=0)
-  ax.tick_params(axis='y', which='major', length=0)
-  ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='left', rotation_mode='anchor')
-  plt.yticks(rotation='horizontal')
-  plt.savefig(f'{output_dir}/'+re.sub(' +', '', cond_name)+'.png', dpi=300, bbox_inches='tight', pad_inches=0)
+
+  fig, axes = plt.subplots(1, len(groups), figsize=(fig_width, fig_height),
+                           gridspec_kw={'width_ratios': col_counts})
+  if len(groups) == 1:
+    axes = [axes]
+
+  for ax, (g_cols, cmap, vmin, vmax, fmt) in zip(axes, groups):
+    kw = dict(annot=True, fmt=fmt, cbar=False, ax=ax, robust=True)
+    if vmin is not None:
+      kw.update(vmin=vmin, vmax=vmax, center=0.0)
+      kw.pop('robust')
+    sns.heatmap(recap[g_cols], cmap=cmap, **kw)
+    ax.xaxis.tick_top()
+    ax.set(xlabel='', ylabel='')
+    ax.tick_params(axis='x', which='major', length=0)
+    ax.tick_params(axis='y', which='major', length=0)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='left', rotation_mode='anchor')
+
+  # Show y-tick labels only on first subplot
+  for ax in axes[1:]:
+    ax.set_yticklabels([])
+
+  fig.suptitle(re.sub(' +', ' ', cond_name), y=1.01)
+  plt.tight_layout()
+  plt.savefig(f'{output_dir}/' + re.sub(' +', '', cond_name) + '.png',
+              dpi=300, bbox_inches='tight', pad_inches=0)
 
 
 # =============================================================================
@@ -547,7 +794,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             min_cluster_size=15, min_samples=5, eps=0.5,
                             min_datapoints=None, feature_weights=None,
                             error_type='binary', categorical_col_names=None,
-                            standardize=True):
+                            standardize=True, error_label=None,
+                            original_sensitive_cols=None):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -644,7 +892,9 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                        sensitive_cols=sensitive_cols, error_col=error_col,
                        error_type=error_type,
                        feature_matrix=result.feature_matrix,
-                       distance_matrix=result.distance_matrix)
+                       distance_matrix=result.distance_matrix,
+                       original_sensitive_cols=original_sensitive_cols,
+                       error_label=error_label)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])

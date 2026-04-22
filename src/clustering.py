@@ -9,6 +9,7 @@ This module provides a flexible clustering function that supports:
 - Cluster quality evaluation
 """
 
+import warnings
 import numpy as np
 import pandas as pd
 from typing import Optional, Literal, Union
@@ -151,8 +152,11 @@ def _find_best_k(
     tuple of (best_k, best_labels, best_score)
     """
     best_score, best_k, best_labels = -np.inf, n_min, None
+    use_precomputed = kmedoids_metric == "precomputed"
 
+    print(f"  k range: [{n_min}, {n_max}]")
     for k in range(n_min, n_max + 1):
+        print(f"  Running k={k}...", end="\r", flush=True)
         if algorithm == "kmeans":
             clusterer = KMeans(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
             labels = clusterer.fit_predict(X_fit)
@@ -161,7 +165,9 @@ def _find_best_k(
             labels = clusterer.fit_predict(X_fit)
         elif algorithm == "kmedoids":
             clusterer = KMedoids(n_clusters=k, metric=kmedoids_metric, random_state=random_state, max_iter=max_iter)
-            labels = clusterer.fit_predict(X_fit)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning, module="sklearn_extra")
+                labels = clusterer.fit_predict(X_fit)
         elif algorithm == "kprototypes":
             kp_kwargs = dict(n_clusters=k, random_state=random_state, n_init=10, max_iter=max_iter)
             if weights is not None:
@@ -171,10 +177,13 @@ def _find_best_k(
         else:
             raise ValueError(f"_find_best_k does not support algorithm: {algorithm}")
 
-        score = scoring_fn(X_score, labels)
+        # For precomputed distance matrices pass X_fit so silhouette_scorer uses the right metric
+        X_for_scoring = X_fit if use_precomputed else X_score
+        score = scoring_fn(X_for_scoring, labels)
         if score > best_score:
             best_score, best_k, best_labels = score, k, labels
 
+    print(f"  Best k={best_k} (score={best_score:.4f})")
     return best_k, best_labels, best_score
 
 
