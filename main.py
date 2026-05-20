@@ -75,8 +75,16 @@ def parse_feature_weights(weight_str, regular_cols, sensitive_cols, special_cols
 
 
 def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm):
-    """Thin wrapper — see src.preprocessing.encode_categoricals."""
-    return encode_categoricals(df, col_lists, categorical_cols_arg, algorithm)
+    """Thin wrapper around encode_categoricals.
+
+    Multi-class one-hot dummies for sensitive columns are kept in the DataFrame
+    (so downstream fairness analysis can use them) but excluded from
+    col_lists['sensitive'] so they don't inflate the clustering feature matrix.
+    Binary sensitive columns are unchanged (single 0/1 dummy goes into the
+    feature matrix as before).
+    """
+    return encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
+                               multiclass_remove_from={'sensitive'})
 
 
 def parse_args():
@@ -262,15 +270,26 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # Resolve error_label
     error_label = getattr(args, 'error_label', None) or error_col or 'error'
 
-    # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes)
+    # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes).
+    # Multi-class dummies from sensitive cols are excluded from col_lists['sensitive']
+    # (so they don't go into the feature matrix), but kept in the DataFrame and tracked
+    # via `multiclass_dummies` for fairness analysis.
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
     col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols, 'special': special_cols}
-    df, col_lists, categorical_col_names = _encode_multiclass_categoricals(
+    df, col_lists, categorical_col_names, multiclass_dummies = _encode_multiclass_categoricals(
         df, col_lists, categorical_cols_arg, args.algorithm
     )
     regular_cols = col_lists['regular']
     sensitive_cols = col_lists['sensitive']
     special_cols = col_lists['special']
+
+    # For fairness analysis, the multi-class dummies of *sensitive* originals are still
+    # needed (proportions, chi2, entropy, balance score). Build the full analysis list
+    # by adding them back on top of the (binary-only) sensitive_cols.
+    sensitive_cols_analysis = list(sensitive_cols)
+    for orig_col, dummies in multiclass_dummies.items():
+        if orig_col in original_sensitive_cols:
+            sensitive_cols_analysis.extend(dummies)
 
     # Build groups dict for condition generation
     groups = {}
@@ -338,7 +357,9 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         args.feature_weights, regular_cols, sensitive_cols, special_cols, all_clustering_cols
     )
 
-    # Run all experiments
+    # Run all experiments.
+    # Pass sensitive_cols_analysis (binary + multi-class dummies) so fairness analysis
+    # inside make_recap sees the multi-class dummies that were excluded from the feature matrix.
     results = run_experiments_generic(
         df,
         exp_condition,
@@ -350,7 +371,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         max_iter=args.max_iter,
         seed=args.seed,
         scoring_fn=scoring_fn,
-        sensitive_cols=sensitive_cols,
+        sensitive_cols=sensitive_cols_analysis,
         error_col=error_col,
         min_samples=args.min_samples,
         eps=args.eps,
@@ -373,7 +394,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         print(f"  Clusters: {n_clusters}, Silhouette: {silhouette_avg:.3f}" if not np.isnan(silhouette_avg) else f"  Clusters: {n_clusters}")
 
     # Generate chi-squared / Kruskal-Wallis test results
-    chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols,
+    chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols_analysis,
                              error_type=args.error_type, error_col=error_col,
                              error_label=error_label)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
@@ -391,7 +412,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
 
     # Generate quality metrics
     all_quali = recap_quali_metrics(chi_res, results, exp_condition,
-                                    sensitive_cols=sensitive_cols,
+                                    sensitive_cols=sensitive_cols_analysis,
                                     original_sensitive_cols=original_sensitive_cols,
                                     error_label=error_label)
 
@@ -470,7 +491,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
             labels = res_df['clusters'].values
             if len(set(labels) - {-1}) > 1:
                 cond_clean = re.sub(r'\s+', '', cond_name)
-                for attr in sensitive_cols:
+                for attr in sensitive_cols_analysis:
                     plot_cluster_composition(labels, res_df[attr].values, attr,
                         out_path=f"{output_dir}/{cond_clean}_composition_{attr}.png")
                     plt.close()
@@ -750,18 +771,27 @@ def main():
     sensitive_cols = parse_column_list(args.sensitive_cols)
     proxy_cols = parse_column_list(args.proxy_cols)
     special_cols = parse_column_list(args.special_cols)
+    original_sensitive_cols = list(sensitive_cols)
 
-    # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes)
+    # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes).
+    # Multi-class sensitive dummies stay in the DataFrame for fairness analysis but are
+    # excluded from col_lists['sensitive'] so they don't inflate the feature matrix.
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
     col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols,
                  'proxy': proxy_cols, 'special': special_cols}
-    df, col_lists, categorical_col_names = _encode_multiclass_categoricals(
+    df, col_lists, categorical_col_names, multiclass_dummies = _encode_multiclass_categoricals(
         df, col_lists, categorical_cols_arg, args.algorithm
     )
     regular_cols = col_lists['regular']
     sensitive_cols = col_lists['sensitive']
     proxy_cols = col_lists['proxy']
     special_cols = col_lists['special']
+
+    # Full sensitive list for fairness analysis (binary + multi-class dummies)
+    sensitive_cols_analysis = list(sensitive_cols)
+    for orig_col, dummies in multiclass_dummies.items():
+        if orig_col in original_sensitive_cols:
+            sensitive_cols_analysis.extend(dummies)
 
     # Build clustering features
     clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols
@@ -872,10 +902,10 @@ def main():
         print(f"  Calinski-Harabasz: {result.calinski_harabasz:.1f}")
     print(f"  Cluster sizes: {result.cluster_sizes}")
 
-    # Fairness evaluation
-    if sensitive_cols:
+    # Fairness evaluation (binary dummies + multi-class dummies from sensitive_cols_analysis)
+    if sensitive_cols_analysis:
         print(f"\nFairness evaluation:")
-        for attr_name in sensitive_cols:
+        for attr_name in sensitive_cols_analysis:
             attr_for_eval = df[attr_name].values
             if result.mask is not None:
                 attr_for_eval = attr_for_eval[result.mask]
@@ -890,11 +920,12 @@ def main():
         res_df['clusters'] = result.labels
 
         recap = make_recap(res_df, clustering_cols,
-                           sensitive_cols=sensitive_cols,
+                           sensitive_cols=sensitive_cols_analysis,
                            error_col=args.error_col,
                            error_type=args.error_type,
                            feature_matrix=result.feature_matrix,
-                           distance_matrix=result.distance_matrix)
+                           distance_matrix=result.distance_matrix,
+                           original_sensitive_cols=original_sensitive_cols)
 
         # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")
