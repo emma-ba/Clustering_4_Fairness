@@ -77,14 +77,12 @@ def parse_feature_weights(weight_str, regular_cols, sensitive_cols, special_cols
 def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm):
     """Thin wrapper around encode_categoricals.
 
-    Multi-class one-hot dummies for sensitive columns are kept in the DataFrame
-    (so downstream fairness analysis can use them) but excluded from
-    col_lists['sensitive'] so they don't inflate the clustering feature matrix.
-    Binary sensitive columns are unchanged (single 0/1 dummy goes into the
-    feature matrix as before).
+    Multi-class one-hot dummies for sensitive and proxy columns are kept in the
+    DataFrame but excluded from their respective col_lists so they don't inflate
+    the clustering feature matrix. Binary columns are unchanged.
     """
     return encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
-                               multiclass_remove_from={'sensitive'})
+                               multiclass_remove_from={'sensitive', 'proxy'})
 
 
 def parse_args():
