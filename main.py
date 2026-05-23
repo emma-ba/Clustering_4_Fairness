@@ -1,6 +1,7 @@
 import os, argparse, re
 import numpy as np
 import pandas as pd
+from scipy.stats import combine_pvalues
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
@@ -74,7 +75,7 @@ def parse_feature_weights(weight_str, regular_cols, sensitive_cols, special_cols
     return weights if weights else None
 
 
-def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm):
+def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm, distance='euclidean'):
     """Thin wrapper around encode_categoricals.
 
     Multi-class one-hot dummies for sensitive and proxy columns are kept in the
@@ -82,7 +83,8 @@ def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorit
     the clustering feature matrix. Binary columns are unchanged.
     """
     return encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
-                               multiclass_remove_from={'sensitive', 'proxy'})
+                               multiclass_remove_from={'sensitive', 'proxy'},
+                               distance=distance)
 
 
 def parse_args():
@@ -192,7 +194,9 @@ def parse_args():
     # DONE: make composite default scoring — composite scorer now default (was silhouette). Weights (silhouette:0.3, error:0.5, fairness:0.2) accept any value in [0, Inf) and are normalized to sum to 1 internally. Missing components (no error_col / no sensitive_cols) are skipped gracefully; falls back to pure silhouette if neither is provided.
     
     parser.add_argument("--sensitive_cols", type=str, default=None,
-                        help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")                                                                                           
+                        help="Sensitive/protected attributes (comma-separated column names). Both binary (0/1) and multi-class columns are supported.")
+    parser.add_argument("--continuous_sensitive_cols", type=str, default=None,
+                        help="Subset of --sensitive_cols to treat as continuous (numeric). For these columns: per-cluster mean / mean-delta / Mann-Whitney p in the recap, Kruskal-Wallis across clusters in chi_res, and mean-range in all_quali. Default: none (all sensitive cols treated as categorical).")
     parser.add_argument("--proxy_cols", type=str, default=None, help="Proxy features for sensitive attributes (comma-separated column names)")                                                                                  
     parser.add_argument("--special_cols", type=str, default=None,
                           help="Special features like SHAP values (comma-separated column names)")
@@ -251,8 +255,15 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # Parse column groups from CLI
     regular_cols = parse_column_list(args.regular_cols)
     sensitive_cols = parse_column_list(args.sensitive_cols)
+    continuous_sensitive_cols = set(parse_column_list(getattr(args, 'continuous_sensitive_cols', None)) or [])
     special_cols = parse_column_list(args.special_cols)
     error_col = args.error_col
+
+    unknown_continuous = continuous_sensitive_cols - set(sensitive_cols or [])
+    if unknown_continuous:
+        raise ValueError(
+            f"--continuous_sensitive_cols entries not found in --sensitive_cols: {sorted(unknown_continuous)}"
+        )
 
     # Validate: need error_col and at least one feature group
     if not error_col:
@@ -274,8 +285,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # via `multiclass_dummies` for fairness analysis.
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
     col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols, 'special': special_cols}
-    df, col_lists, categorical_col_names, multiclass_dummies = _encode_multiclass_categoricals(
-        df, col_lists, categorical_cols_arg, args.algorithm
+    df, col_lists, categorical_col_names, multiclass_dummies, ohe_col_names = _encode_multiclass_categoricals(
+        df, col_lists, categorical_cols_arg, args.algorithm, distance=args.distance
     )
     regular_cols = col_lists['regular']
     sensitive_cols = col_lists['sensitive']
@@ -380,6 +391,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         standardize=not args.no_standardize,
         error_label=error_label,
         original_sensitive_cols=original_sensitive_cols,
+        continuous_sensitive_cols=continuous_sensitive_cols,
+        ohe_col_names=ohe_col_names,
     )
 
     # Print progress for each condition
@@ -394,7 +407,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # Generate chi-squared / Kruskal-Wallis test results
     chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols_analysis,
                              error_type=args.error_type, error_col=error_col,
-                             error_label=error_label)
+                             error_label=error_label,
+                             continuous_sensitive_cols=continuous_sensitive_cols)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
@@ -412,7 +426,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     all_quali = recap_quali_metrics(chi_res, results, exp_condition,
                                     sensitive_cols=sensitive_cols_analysis,
                                     original_sensitive_cols=original_sensitive_cols,
-                                    error_label=error_label)
+                                    error_label=error_label,
+                                    continuous_sensitive_cols=continuous_sensitive_cols)
 
     # Create chi-squared heatmap visualization
     chi_viz_cols = [error_label] + actual_sensitive_cols
@@ -448,7 +463,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         for i, cond_name in enumerate(results['cond_name']):
             recap = results['cond_recap'][i].copy()
             if len(recap) > 1:  # Only plot if there are multiple clusters
-                plot_cluster_recap_heatmap(recap, cond_name, output_dir)
+                plot_cluster_recap_heatmap(recap, cond_name, output_dir, multiclass_dummies=multiclass_dummies)
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
 
@@ -490,6 +505,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
             if len(set(labels) - {-1}) > 1:
                 cond_clean = re.sub(r'\s+', '', cond_name)
                 for attr in sensitive_cols_analysis:
+                    if attr in continuous_sensitive_cols:
+                        continue
                     plot_cluster_composition(labels, res_df[attr].values, attr,
                         out_path=f"{output_dir}/{cond_clean}_composition_{attr}.png")
                     plt.close()
@@ -714,16 +731,23 @@ def main():
             # Generate cross-seed summary
             if all_chi_res:
                 combined = pd.concat(all_chi_res, ignore_index=True)
-                # Compute mean/std of numeric columns grouped by condition
-                numeric_cols = [c for c in combined.columns if c not in ('cond_descr', 'cond_name', 'seed')]
+                p_value_cols = [c for c in combined.columns if c not in ('cond_descr', 'cond_name', 'seed')]
                 summary_rows = []
                 for cond_name in combined['cond_name'].unique():
                     cond_data = combined[combined['cond_name'] == cond_name]
                     row = {'cond_name': cond_name}
-                    for col in numeric_cols:
-                        vals = cond_data[col].dropna()
-                        row[f'{col}_mean'] = vals.mean() if len(vals) > 0 else np.nan
-                        row[f'{col}_std'] = vals.std() if len(vals) > 1 else np.nan
+                    for col in p_value_cols:
+                        vals = cond_data[col].dropna().values
+                        if len(vals) == 0:
+                            row[f'{col}_fisher_p'] = np.nan
+                            row[f'{col}_std'] = np.nan
+                            row[f'{col}_n_sig'] = 0
+                        else:
+                            clipped = np.clip(vals, np.finfo(float).tiny, 1.0)
+                            _, fisher_p = combine_pvalues(clipped, method='fisher')
+                            row[f'{col}_fisher_p'] = round(float(fisher_p), 6)
+                            row[f'{col}_std'] = round(float(vals.std()), 6) if len(vals) > 1 else np.nan
+                            row[f'{col}_n_sig'] = int((vals < 0.05).sum())
                     summary_rows.append(row)
                 summary_df = pd.DataFrame(summary_rows)
                 summary_df.to_csv(os.path.join(base_output_dir, 'cross_seed_summary.csv'), index=False)
@@ -767,9 +791,16 @@ def main():
 
     regular_cols = parse_column_list(args.regular_cols)
     sensitive_cols = parse_column_list(args.sensitive_cols)
+    continuous_sensitive_cols = set(parse_column_list(getattr(args, 'continuous_sensitive_cols', None)) or [])
     proxy_cols = parse_column_list(args.proxy_cols)
     special_cols = parse_column_list(args.special_cols)
     original_sensitive_cols = list(sensitive_cols)
+
+    unknown_continuous = continuous_sensitive_cols - set(sensitive_cols or [])
+    if unknown_continuous:
+        raise ValueError(
+            f"--continuous_sensitive_cols entries not found in --sensitive_cols: {sorted(unknown_continuous)}"
+        )
 
     # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes).
     # Multi-class sensitive dummies stay in the DataFrame for fairness analysis but are
@@ -777,8 +808,8 @@ def main():
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
     col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols,
                  'proxy': proxy_cols, 'special': special_cols}
-    df, col_lists, categorical_col_names, multiclass_dummies = _encode_multiclass_categoricals(
-        df, col_lists, categorical_cols_arg, args.algorithm
+    df, col_lists, categorical_col_names, multiclass_dummies, ohe_col_names = _encode_multiclass_categoricals(
+        df, col_lists, categorical_cols_arg, args.algorithm, distance=args.distance
     )
     regular_cols = col_lists['regular']
     sensitive_cols = col_lists['sensitive']
@@ -795,8 +826,9 @@ def main():
     clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols
     features = df[clustering_cols] if clustering_cols else df
 
-    # Categorical feature indices (only non-empty for kprototypes)
     categorical_features = [i for i, c in enumerate(clustering_cols) if c in categorical_col_names] or None
+    ohe_col_set = set(ohe_col_names)
+    ohe_feature_indices = [i for i, c in enumerate(clustering_cols) if c in ohe_col_set] or None
 
     # Parse feature weights
     feature_weights = parse_feature_weights(
@@ -888,6 +920,7 @@ def main():
         min_datapoints=args.min_datapoints,
         scoring_fn=scoring_fn,
         standardize=not args.no_standardize,
+        ohe_features=ohe_feature_indices,
     )
 
     # Results
@@ -904,6 +937,8 @@ def main():
     if sensitive_cols_analysis:
         print(f"\nFairness evaluation:")
         for attr_name in sensitive_cols_analysis:
+            if attr_name in continuous_sensitive_cols:
+                continue
             attr_for_eval = df[attr_name].values
             if result.mask is not None:
                 attr_for_eval = attr_for_eval[result.mask]
@@ -923,7 +958,8 @@ def main():
                            error_type=args.error_type,
                            feature_matrix=result.feature_matrix,
                            distance_matrix=result.distance_matrix,
-                           original_sensitive_cols=original_sensitive_cols)
+                           original_sensitive_cols=original_sensitive_cols,
+                           continuous_sensitive_cols=continuous_sensitive_cols)
 
         # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")
@@ -934,7 +970,7 @@ def main():
 
         # Save recap heatmap
         if not args.no_plots and len(recap) > 1:
-            plot_cluster_recap_heatmap(recap.copy(), run_name, output_dir)
+            plot_cluster_recap_heatmap(recap.copy(), run_name, output_dir, multiclass_dummies=multiclass_dummies)
             print(f"Saved: {run_name}.png")
 
     # Separability check (chi-squared for categorical, Kruskal-Wallis for numeric)

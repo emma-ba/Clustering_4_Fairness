@@ -33,7 +33,7 @@ def compute_representation_ratio(
     Compute representation ratio of a demographic group in each cluster vs overall.
 
     Parameters
-    ----------
+    ----------  
     labels : np.ndarray
         Cluster labels.
     attribute : np.ndarray
@@ -53,7 +53,7 @@ def compute_representation_ratio(
     for cluster_id in sorted(set(labels) - {-1}):
         mask = labels == cluster_id
         cluster_rate = (attribute[mask] == reference_value).mean()
-        ratios[cluster_id] = cluster_rate / overall_rate if overall_rate > 0 else 0.0
+        ratios[cluster_id] = cluster_rate / overall_rate if overall_rate > 0 else np.nan
 
     return ratios
 

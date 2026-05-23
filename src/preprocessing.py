@@ -2,11 +2,12 @@
 Preprocessing utilities for clustering fairness analysis.
 """
 
+import numpy as np
 import pandas as pd
 
 
 def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
-                        multiclass_remove_from=None):
+                        multiclass_remove_from=None, distance='euclidean'):
     """
     Encode categorical columns for clustering.
 
@@ -40,6 +41,10 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
         For each multi-class column that was encoded, maps the original column
         name to its dummy column names. Useful for callers that excluded these
         from col_lists but still need them for downstream analysis.
+    ohe_col_names : list of str
+        Names of all one-hot encoded dummy columns (binary and multi-class).
+        Empty for kprototypes and gower paths. Callers use this to exclude
+        OHE dummies from StandardScaler.
     """
     multiclass_remove_from = set(multiclass_remove_from or [])
 
@@ -61,16 +66,29 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
                 categorical_col_names.add(col)
 
     if algorithm == 'kprototypes':
-        # kprototypes handles mixed types internally — no encoding needed
-        return df, col_lists, list(categorical_col_names), {}
+        return df, col_lists, list(categorical_col_names), {}, []
+
+    if distance == 'gower':
+        df_encoded = df.copy()
+        for col in sorted(categorical_col_names):
+            if col not in df_encoded.columns:
+                continue
+            dtype = df_encoded[col].dtype
+            if dtype.kind in ('O', 'U', 'S') or dtype.name in ('category', 'string'):
+                codes, _ = pd.factorize(df_encoded[col])
+                codes = codes.astype(float)
+                codes[codes < 0] = np.nan
+                df_encoded[col] = codes
+        return df_encoded, col_lists, list(categorical_col_names), {}, []
 
     if not categorical_col_names:
-        return df, col_lists, [], {}
+        return df, col_lists, [], {}, []
 
     # One-hot encode each categorical column and update all col_lists
     df_encoded = df.copy()
     col_lists_updated = {name: list(cols) for name, cols in col_lists.items()}
     multiclass_dummies = {}
+    all_ohe_dummy_cols = []
 
     for col in sorted(categorical_col_names):
         if col not in df_encoded.columns:
@@ -90,6 +108,7 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
         drop_first = not is_multiclass
         dummies = pd.get_dummies(df_encoded[col], prefix=col, drop_first=drop_first).astype('int8')
         dummy_cols = list(dummies.columns)
+        all_ohe_dummy_cols.extend(dummy_cols)
 
         # Check for column name collisions with existing columns (excluding the col being replaced)
         existing_cols = set(df_encoded.columns) - {col}
@@ -119,4 +138,4 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
             for j, dc in enumerate(dummy_cols):
                 cols.insert(idx + j, dc)
 
-    return df_encoded, col_lists_updated, [], multiclass_dummies
+    return df_encoded, col_lists_updated, [], multiclass_dummies, all_ohe_dummy_cols

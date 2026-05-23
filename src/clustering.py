@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from sklearn.cluster import DBSCAN, HDBSCAN, KMeans, BisectingKMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
-from kmodes.kprototypes import KPrototypes
+from kmodes.kprototypes import KPrototypes, euclidean_dissim, matching_dissim
 from sklearn_extra.cluster import KMedoids
 from .scoring import ScoringFn, silhouette_scorer
 @dataclass
@@ -207,6 +207,7 @@ def cluster(
     standardize: bool = True,
     min_datapoints: Optional[int] = None,
     scoring_fn: Optional[ScoringFn] = None,
+    ohe_features: Optional[list[int]] = None,
 ) -> ClusteringResult:
     """
     Perform clustering on features with flexible configuration.
@@ -305,12 +306,13 @@ def cluster(
         else:
             weights = np.asarray(feature_weights)
 
-    # Standardize numeric features (skip for kprototypes which handles mixed types internally)
     if standardize and distance != "gower" and algorithm != "kprototypes":
-        if categorical_features:
-            numeric_mask = [i for i in range(X.shape[1]) if i not in categorical_features]
+        exclude = set(categorical_features or []) | set(ohe_features or [])
+        if exclude:
+            X = X.astype(float)
+            numeric_mask = [i for i in range(X.shape[1]) if i not in exclude]
             scaler = StandardScaler()
-            X[:, numeric_mask] = scaler.fit_transform(X[:, numeric_mask].astype(float))
+            X[:, numeric_mask] = scaler.fit_transform(X[:, numeric_mask])
         else:
             scaler = StandardScaler()
             X = scaler.fit_transform(X)
@@ -374,8 +376,12 @@ def cluster(
             if categorical_features is None or len(categorical_features) == 0:
                 raise ValueError("kprototypes requires categorical_features to be specified")
 
-        # For kmedoids, precompute the input matrix and metric before unified fitting below.
-        # All other algorithms use raw X with their own internal distance.
+        if algorithm in ("kmeans", "bisectingkmeans") and distance == "gower":
+            raise ValueError(
+                f"{algorithm} requires a Euclidean feature space to compute centroids and "
+                f"cannot use Gower distance. Use --algorithm kmedoids --distance gower instead."
+            )
+
         if algorithm == "kmedoids":
             if distance == "gower":
                 X_fit = gower_distance(X, categorical_features, weights)
@@ -451,7 +457,23 @@ def cluster(
         non_noise_mask = labels != -1
         if non_noise_mask.sum() > n_clusters:
             if algorithm == "kprototypes":
-                pass  # kprototypes uses mixed-type internal distance — no valid silhouette
+                X_sub = X[non_noise_mask].astype(object)
+                cat_set = set(categorical_features or [])
+                num_idx = np.array([i for i in range(X_sub.shape[1]) if i not in cat_set])
+                cat_idx = np.array(sorted(cat_set), dtype=int) if cat_set else np.array([], dtype=int)
+                gamma = float(clusterer.gamma)
+                n_sub = X_sub.shape[0]
+                num_dm = np.zeros((n_sub, n_sub))
+                cat_dm = np.zeros((n_sub, n_sub))
+                if len(num_idx):
+                    X_num = X_sub[:, num_idx].astype(float)
+                    diff = X_num[:, np.newaxis, :] - X_num[np.newaxis, :, :]
+                    num_dm = np.sum(diff ** 2, axis=2)
+                if len(cat_idx):
+                    X_cat = X_sub[:, cat_idx]
+                    cat_dm = np.sum(X_cat[:, np.newaxis, :] != X_cat[np.newaxis, :, :], axis=2).astype(float)
+                gower_mat = num_dm + gamma * cat_dm
+                silhouette = silhouette_score(gower_mat, labels[non_noise_mask], metric="precomputed")
             elif distance == "gower":
                 # Recompute Gower matrix on non-noise rows and use metric="precomputed"
                 gower_mat = gower_distance(X[non_noise_mask], categorical_features, weights)
