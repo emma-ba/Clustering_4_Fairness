@@ -94,6 +94,7 @@ python main.py --data_path <path> [options]
 |---|---|
 | `--regular_cols` | Comma-separated list of socioeconomic or behavioral features to cluster on (e.g. `age,income,priors_count`) |
 | `--sensitive_cols` | Comma-separated protected attributes to include in clustering and analyze for bias (e.g. `sex_Female,race_African-American`). Binary 0/1 or multi-class — multi-class columns are auto-expanded into per-value indicators |
+| `--continuous_sensitive_cols` | Subset of `--sensitive_cols` to treat as continuous rather than categorical (e.g. `age`). For these columns the recap shows per-cluster mean, mean delta vs. the rest, and a Mann-Whitney U p-value instead of proportions. The global test in `chi_res` uses Kruskal-Wallis instead of chi-square. Use this for any sensitive attribute that is a genuine numeric quantity — age, income, score — where computing a proportion would be meaningless. |
 | `--proxy_cols` | Features that act as proxies for sensitive attributes (included in clustering but treated separately in analysis) |
 | `--special_cols` | Special features such as SHAP values — included in clustering but not in separability tests |
 | `--categorical_cols` | Columns to treat as categorical, comma-separated. String/category dtype columns are detected and one-hot encoded automatically — use this to force-mark additional columns (e.g. integer-encoded labels). For `kprototypes`, columns are passed directly to the algorithm without encoding. For `--distance gower` with binary 0/1 integer columns, one-hot encoding is a no-op and Gower distances are identical either way. Multi-class integer columns with Gower are currently one-hot encoded and treated as numeric; all pairwise distances end up equal which is approximately correct but not identical to true categorical treatment |
@@ -116,6 +117,12 @@ python main.py --data_path <path> [options]
 | `--seeds` | Comma-separated list of seeds to run experiment mode multiple times and aggregate (e.g. `42,123,456`) |
 | `--max_iter` | Maximum number of iterations for KMeans and BisectingKMeans (default: 300) |
 
+### kprototypes — silhouette score
+
+Standard silhouette cannot be computed directly for kprototypes because it uses a mixed distance (numeric + categorical) that sklearn's silhouette implementation does not support. Instead, the pipeline precomputes the full pairwise distance matrix using the same distance as the algorithm and passes it to `silhouette_score` with `metric='precomputed'`. See [Silhouette Coefficient for K-Modes and K-Prototypes Clustering](https://codinginfinite.com/silhouette-coefficient-for-k-modes-and-k-prototypes-clustering/) for the approach this implementation follows.
+
+> **Technical note:** The distance matrix combines squared Euclidean distance (numeric features) and Hamming distance (categorical features), weighted by gamma — the same gamma the algorithm uses internally during fitting (`fitted_model.gamma_`). Using plain Euclidean distance would ignore the categorical part of the space entirely, producing a silhouette score that does not reflect the actual clustering.
+
 ### DBSCAN / HDBSCAN specific
 | Parameter | Description |
 |---|---|
@@ -134,6 +141,26 @@ python main.py --data_path <path> [options]
 | `--output_dir` | Custom output directory. Default is `clustering_results/<date>/` |
 | `--experiment` | Run in experiment mode: automatically generates all combinations of feature groups (REG, SEN, ERR) and runs each as a separate condition, then produces a comparative summary |
 
+
+---
+
+## Input data format notes
+
+### Categorical columns
+
+The pipeline auto-detects string/object/category dtype columns and one-hot encodes them. One-hot encoded columns are kept as 0/1 and excluded from `StandardScaler`. Applying StandardScaler to binary OHE columns distorts Euclidean distances: rarer categories get scaled to larger values than common ones, so they end up contributing more to the distance between points regardless of their actual importance. The rarer the category, the worse the distortion. Skipping StandardScaler for OHE columns avoids this entirely. See [Cross Validated — Bias towards categorical data when one-hot encoding and standardizing](https://stats.stackexchange.com/questions/612809/bias-towards-categorical-data-when-one-hot-encoding-and-standardizing-for-machi) for a full discussion.
+
+Use `--categorical_cols` to force-mark additional columns that look numeric but are semantically categorical (e.g. integer-encoded labels, ordinal bands).
+
+## Data already one-hot encoded
+
+If your CSV has columns that were one-hot encoded externally (e.g. `gender_F = 0/1`, `region_NorthWest = 0/1`), the pipeline cannot detect them as categorical by dtype — they are integers. Without declaring them, `StandardScaler` will be applied and rare categories will be over-weighted in clustering.
+
+Pass those columns via `--categorical_cols`. The pipeline will re-encode them (harmlessly, since a binary 0/1 column re-encodes to an identical column), add them to the protected set, and exclude them from scaling.
+
+If all features in your dataset are already on comparable scales, use `--no_standardize` instead.
+
+> **Planned:** A dedicated `--ohe_cols` argument will allow declaring pre-encoded columns directly without going through re-encoding.
 
 ---
 
@@ -243,6 +270,26 @@ clustering_results/<date>/<timestamp>_experiment_<dataset>_<algorithm>_<distance
   chi_res.csv / chi_res_heatmap.png # KW/chi2 p-values per condition
   exp_condition.csv                 # feature set per condition
 ```
+
+---
+
+## Fairness metrics
+
+Each sensitive column produces the following metrics per cluster in the recap CSV and heatmap. All metric functions are in `src/fairness_metrics.py` and are called from `make_recap` in `src/experiments.py`.
+
+| Column suffix | What it measures | Reference |
+|---|---|---|
+| `_prop` | Proportion of that group in the cluster (demographic parity) | [Fairlearn — common fairness metrics](https://fairlearn.org/main/user_guide/assessment/common_fairness_metrics.html) |
+| `_repr_ratio` | Cluster proportion divided by the overall population proportion. >1 = over-represented, <1 = under-represented (disparate impact ratio) | [Fairlearn — common fairness metrics](https://fairlearn.org/main/user_guide/assessment/common_fairness_metrics.html) |
+| `_entropy` | Shannon entropy of group proportions within the cluster. Higher = more evenly mixed | [scipy.stats.entropy](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.entropy.html) |
+| `_max_prop_diff` | Max minus min proportion across all values of a multi-class attribute — how spread the representation is within a cluster | — |
+| `_p` | Poisson means test p-value comparing the group count in this cluster against all other clusters combined | — |
+
+The `balance_score` (1 − mean absolute deviation from population proportions; 1.0 = perfectly balanced) and per-condition entropy averages appear in `all_quali_heatmap.png` and `results_summary.csv` in experiment mode. These are defined as custom metrics following the pattern described in [Fairlearn — custom fairness metrics](https://fairlearn.org/main/user_guide/assessment/custom_fairness_metrics.html).
+
+### Multiple comparison correction
+
+In experiment mode, p-values across sensitive columns are corrected per condition using the Benjamini-Hochberg (BH) procedure (`scipy.stats.false_discovery_control`), which controls the false discovery rate. This runs on a small array of floats after clustering is complete and adds no measurable overhead to the pipeline.
 
 ---
 
