@@ -468,7 +468,7 @@ def cluster(
                 if len(num_idx):
                     X_num = X_sub[:, num_idx].astype(float)
                     diff = X_num[:, np.newaxis, :] - X_num[np.newaxis, :, :]
-                    num_dm = np.sum(diff ** 2, axis=2)
+                    num_dm = np.sqrt(np.sum(diff ** 2, axis=2))
                 if len(cat_idx):
                     X_cat = X_sub[:, cat_idx]
                     cat_dm = np.sum(X_cat[:, np.newaxis, :] != X_cat[np.newaxis, :, :], axis=2).astype(float)
