@@ -365,7 +365,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         # else: no error_col or sensitive_cols -> scoring_fn stays None -> silhouette fallback
 
     # Parse feature weights (include sensitive_cols — they are part of clustering)
-    all_clustering_cols = regular_cols + sensitive_cols + special_cols
+    all_clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols
     feature_weights = parse_feature_weights(
         args.feature_weights, regular_cols, sensitive_cols, special_cols, all_clustering_cols
     )
