@@ -256,6 +256,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     regular_cols = parse_column_list(args.regular_cols)
     sensitive_cols = parse_column_list(args.sensitive_cols)
     continuous_sensitive_cols = set(parse_column_list(getattr(args, 'continuous_sensitive_cols', None)) or [])
+    proxy_cols = parse_column_list(args.proxy_cols)
     special_cols = parse_column_list(args.special_cols)
     error_col = args.error_col
 
@@ -284,12 +285,13 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # (so they don't go into the feature matrix), but kept in the DataFrame and tracked
     # via `multiclass_dummies` for fairness analysis.
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
-    col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols, 'special': special_cols}
+    col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols, 'proxy': proxy_cols, 'special': special_cols}
     df, col_lists, categorical_col_names, multiclass_dummies, ohe_col_names = _encode_multiclass_categoricals(
         df, col_lists, categorical_cols_arg, args.algorithm, distance=args.distance
     )
     regular_cols = col_lists['regular']
     sensitive_cols = col_lists['sensitive']
+    proxy_cols = col_lists['proxy']
     special_cols = col_lists['special']
 
     # For fairness analysis, the multi-class dummies of *sensitive* originals are still
@@ -307,6 +309,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     if sensitive_cols:
         groups['SEN'] = sensitive_cols
     groups['ERR'] = [error_col]
+    if proxy_cols:
+        groups['PROXY'] = proxy_cols
     if special_cols:
         groups['SPECIAL'] = special_cols
 

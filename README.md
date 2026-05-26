@@ -121,7 +121,7 @@ python main.py --data_path <path> [options]
 
 Standard silhouette cannot be computed directly for kprototypes because it uses a mixed distance (numeric + categorical) that sklearn's silhouette implementation does not support. Instead, the pipeline precomputes the full pairwise distance matrix using the same distance as the algorithm and passes it to `silhouette_score` with `metric='precomputed'`. See [Silhouette Coefficient for K-Modes and K-Prototypes Clustering](https://codinginfinite.com/silhouette-coefficient-for-k-modes-and-k-prototypes-clustering/) for the approach this implementation follows.
 
-> **Technical note:** The distance matrix combines squared Euclidean distance (numeric features) and Hamming distance (categorical features), weighted by gamma — the same gamma the algorithm uses internally during fitting (`fitted_model.gamma_`). Using plain Euclidean distance would ignore the categorical part of the space entirely, producing a silhouette score that does not reflect the actual clustering.
+> **Note:** The distance matrix combines squared Euclidean distance (numeric features) and Hamming distance (categorical features), weighted by gamma — the same gamma the algorithm uses internally during fitting (`fitted_model.gamma_`). Using plain Euclidean distance would ignore the categorical part of the space entirely, producing a silhouette score that does not reflect the actual clustering.
 
 ### DBSCAN / HDBSCAN specific
 | Parameter | Description |

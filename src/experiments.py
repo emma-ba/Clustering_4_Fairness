@@ -967,8 +967,11 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
   cat_names_set = set(categorical_col_names) if categorical_col_names else set()
   ohe_col_set = set(ohe_col_names) if ohe_col_names else set()
 
-  for i in range(len(exp_condition)):
+  n_conditions = len(exp_condition)
+  for i in range(n_conditions):
     feature_set = exp_condition['feature_set'][i]
+    cond_name = exp_condition['feature_set_name'][i].strip()
+    print(f"  [{i+1}/{n_conditions}] {cond_name} ...", flush=True)
 
     cat_features = [j for j, c in enumerate(feature_set) if c in cat_names_set] or None
     ohe_feature_indices = [j for j, c in enumerate(feature_set) if c in ohe_col_set] or None
@@ -992,6 +995,10 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
         standardize=standardize,
         ohe_features=ohe_feature_indices,
     )
+
+    sil_str = f", silhouette={result.silhouette:.3f}" if result.silhouette is not None else ""
+    noise_str = f", noise={result.n_noise}" if result.n_noise > 0 else ""
+    print(f"         k={result.n_clusters}{sil_str}{noise_str}")
 
     # Build result DataFrame: original data + 'clusters' column
     res_df = data.copy()
