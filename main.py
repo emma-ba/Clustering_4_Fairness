@@ -274,7 +274,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     if not sensitive_cols:
         raise ValueError("--sensitive_cols is required in experiment mode (for proportion analysis)")
 
-    # Preserve original (pre-encoding) sensitive column names for balance_score / entropy
+    # Preserve original (pre-encoding) sensitive column names for fairness analysis
     original_sensitive_cols = parse_column_list(args.sensitive_cols)
 
     # Resolve error_label
@@ -572,13 +572,6 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
             row['diff_vs_rest_min'] = _safe_stat(dvr, np.min)
             row['diff_vs_rest_max'] = _safe_stat(dvr, np.max)
             row['diff_vs_rest_max_diff'] = round(dvr.max() - dvr.min(), 4) if not dvr.isna().all() else np.nan
-
-        # Balance scores per original sensitive col
-        if all_quali_lookup is not None and cond_name in all_quali_lookup.index:
-            for col in original_sensitive_cols:
-                bal_key = f'balance_{col}'
-                if bal_key in all_quali_lookup.columns:
-                    row[bal_key] = all_quali_lookup.loc[cond_name, bal_key]
 
         summary_rows.append(row)
 
