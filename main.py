@@ -701,7 +701,9 @@ def main():
         # Multi-seed experiment mode
         if args.seeds:
             seeds = [int(s.strip()) for s in args.seeds.split(',')]
-            base_output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_multi_seed")
+            seeds_str = "_".join(f"s{s}" for s in seeds)
+            weight_suffix = "_w_" + args.feature_weights.replace(":", "").replace(",", "_") if args.feature_weights else ""
+            base_output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_{seeds_str}{weight_suffix}")
             os.makedirs(base_output_dir, exist_ok=True)
 
             all_chi_res = []
@@ -761,7 +763,8 @@ def main():
             return
 
         # Single-seed experiment mode
-        output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_{args.algorithm}_{args.distance}_s{args.seed}")
+        weight_suffix = "_w_" + args.feature_weights.replace(":", "").replace(",", "_") if args.feature_weights else ""
+        output_dir = os.path.join(args.output_dir, f"{full_timestamp}_experiment_{dataset_name}_{args.algorithm}_{args.distance}_s{args.seed}{weight_suffix}")
         os.makedirs(output_dir, exist_ok=True)
         metadata = {
             'dataset': dataset_name,
@@ -777,7 +780,8 @@ def main():
 
     # Single run mode
     full_timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    run_id = f"{full_timestamp}_{dataset_name}_{args.algorithm}_{args.distance}_s{args.seed}"
+    weight_suffix = "_w_" + args.feature_weights.replace(":", "").replace(",", "_") if args.feature_weights else ""
+    run_id = f"{full_timestamp}_{dataset_name}_{args.algorithm}_{args.distance}_s{args.seed}{weight_suffix}"
     output_dir = os.path.join(args.output_dir, run_id)
     os.makedirs(output_dir, exist_ok=True)
 

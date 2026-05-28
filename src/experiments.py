@@ -761,7 +761,7 @@ def plot_quality_heatmap(all_quali_viz, output_path, figsize=None, error_label='
     figsize = (max(6, total_cols * 1.2), max(4, n_rows * 0.6))
 
   fig, axes = plt.subplots(1, n_groups, figsize=figsize,
-                           gridspec_kw={'width_ratios': col_counts})
+                           gridspec_kw={'width_ratios': col_counts, 'wspace': 0})
   if n_groups == 1:
     axes = [axes]
 
@@ -867,7 +867,7 @@ def plot_cluster_recap_heatmap(recap, cond_name, output_dir, multiclass_dummies=
   fig_height = max(4, n_rows * 1.2)
 
   fig, axes = plt.subplots(1, len(groups), figsize=(fig_width, fig_height),
-                           gridspec_kw={'width_ratios': col_counts})
+                           gridspec_kw={'width_ratios': col_counts, 'wspace': 0})
   if len(groups) == 1:
     axes = [axes]
 
