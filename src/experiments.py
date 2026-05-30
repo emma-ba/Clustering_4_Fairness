@@ -20,6 +20,7 @@ from scipy import stats
 from scipy.stats import chi2_contingency, kruskal, mannwhitneyu, false_discovery_control
 from itertools import combinations
 from .clustering import cluster
+from .fairness_metrics import cluster_proportion, one_vs_all_p_binary, one_vs_all_p_continuous, mean_diff
 
 
 # =============================================================================
@@ -188,51 +189,30 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     rest_recap = recap.loc[recap['clusters'] != c]
     rest_count = rest_recap['count'].sum()
 
-    #### Quick test: differences in error rates
+    # Error — one-vs-all diff and p-value
     if error_type == 'regression':
-      # Regression: diff of means + Mann-Whitney U test
       c_errors = c_data[error_col].values
       rest_errors = rest_data[error_col].values
-      diff_vs_rest.append(round(c_errors.mean() - rest_errors.mean(), 6))
-      try:
-        _, p = mannwhitneyu(c_errors, rest_errors, alternative='two-sided')
-        diff_p.append(round(p, 3))
-      except ValueError:
-        diff_p.append(np.nan)
+      diff_vs_rest.append(round(mean_diff(c_errors, rest_errors), 6))
+      diff_p.append(one_vs_all_p_continuous(c_errors, rest_errors))
     else:
-      # Binary: Get error rate difference 1-vs-rest
       rest_n_error = rest_recap['n_error'].sum()
-      rest_rate = rest_n_error / rest_count
-      diff_vs_rest.append(recap['error_rate'][c] - rest_rate)
+      diff_vs_rest.append(recap['error_rate'][c] - rest_n_error / rest_count)
+      diff_p.append(one_vs_all_p_binary(
+          recap['n_error'][c], recap['count'][c], rest_n_error, rest_count
+      ))
 
-      # ...with Poisson stat test
-      # Deal with splits with 0 error
-      if (recap['n_error'][c] < 1) or (recap['count'][c] < 1) or (rest_n_error < 1) or (rest_count < 1):
-        res = stats.poisson_means_test(recap['count'][c] - recap['n_error'][c], recap['count'][c], rest_count - rest_n_error, rest_count)
-        diff_p.append(round(res.pvalue, 3))
-      else:
-        res = stats.poisson_means_test(recap['n_error'][c], recap['count'][c], rest_n_error, rest_count)
-        diff_p.append(round(res.pvalue, 3))
-
-    ##### Sensitive features — dynamic loop (uses expanded columns)
+    # Binary sensitive features — one-vs-all proportion, diff, p-value
     for col in sensitive_cols_expanded:
-      rest_n = rest_data[col].sum()
-      rest_prop = rest_n / rest_count
-
       c_n = c_data[col].sum()
-      c_prop = c_n / c_count if c_count > 0 else 0.0
+      rest_n = rest_data[col].sum()
+      c_prop = cluster_proportion(c_n, c_count)
+      rest_prop = cluster_proportion(rest_n, rest_count)
+      sensitive_data[col]['prop'].append(round(c_prop, 4))
+      sensitive_data[col]['diff'].append(round(c_prop - rest_prop, 4))
+      sensitive_data[col]['p'].append(one_vs_all_p_binary(c_n, c_count, rest_n, rest_count))
 
-      sensitive_data[col]['prop'].append(round(float(c_prop), 4))
-      sensitive_data[col]['diff'].append(round(float(c_prop - rest_prop), 4))
-
-      # Poisson means test (handle zero counts)
-      if (c_n < 1) or (c_count < 1) or (rest_n < 1) or (rest_count < 1):
-        res = stats.poisson_means_test(c_count - c_n, c_count, rest_count - rest_n, rest_count)
-        sensitive_data[col]['p'].append(round(res.pvalue, 3))
-      else:
-        res = stats.poisson_means_test(c_n, c_count, rest_n, rest_count)
-        sensitive_data[col]['p'].append(round(res.pvalue, 3))
-
+    # Numeric sensitive features — one-vs-all mean, diff, p-value
     for col in numeric_sensitive_cols:
       c_vals = c_data[col].dropna().values
       rest_vals = rest_data[col].dropna().values
@@ -241,15 +221,9 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         numeric_data[col]['avg_delta'].append(np.nan)
         numeric_data[col]['p'].append(np.nan)
         continue
-      c_mean = float(c_vals.mean())
-      rest_mean = float(rest_vals.mean())
-      numeric_data[col]['avg'].append(round(c_mean, 4))
-      numeric_data[col]['avg_delta'].append(round(c_mean - rest_mean, 4))
-      try:
-        _, p = mannwhitneyu(c_vals, rest_vals, alternative='two-sided')
-        numeric_data[col]['p'].append(round(float(p), 6))
-      except ValueError:
-        numeric_data[col]['p'].append(np.nan)
+      numeric_data[col]['avg'].append(round(float(c_vals.mean()), 4))
+      numeric_data[col]['avg_delta'].append(round(mean_diff(c_vals, rest_vals), 4))
+      numeric_data[col]['p'].append(one_vs_all_p_continuous(c_vals, rest_vals))
 
   # Collect all new columns into a dict then concat once to avoid fragmentation
   new_cols = {

@@ -28,12 +28,11 @@ from .visualization import (
     plot_quality_metrics_heatmap,
 )
 from .fairness_metrics import (
-    evaluate_fairness,
     FairnessMetrics,
-    compute_demographic_parity,
-    compute_representation_ratio,
-    compute_balance_score,
-    print_fairness_report,
+    cluster_proportion,
+    one_vs_all_p_binary,
+    one_vs_all_p_continuous,
+    mean_diff,
 )
 from .experiments import (
     make_recap,
