@@ -64,12 +64,11 @@ __all__ = [
     "plot_silhouette_heatmap",
     "plot_quality_metrics_heatmap",
     # fairness_metrics
-    "evaluate_fairness",
     "FairnessMetrics",
-    "compute_demographic_parity",
-    "compute_representation_ratio",
-    "compute_balance_score",
-    "print_fairness_report",
+    "cluster_proportion",
+    "one_vs_all_p_binary",
+    "one_vs_all_p_continuous",
+    "mean_diff",
     # experiments
     "make_recap",
     "make_chi_tests",

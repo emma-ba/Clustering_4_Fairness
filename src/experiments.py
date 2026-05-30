@@ -15,12 +15,20 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import seaborn as sns
 import re
+from sklearn import config_context
 from sklearn.metrics import silhouette_samples
 from scipy import stats
 from scipy.stats import chi2_contingency, kruskal, mannwhitneyu, false_discovery_control
 from itertools import combinations
 from .clustering import cluster
 from .fairness_metrics import cluster_proportion, one_vs_all_p_binary, one_vs_all_p_continuous, mean_diff
+
+
+# Per-chunk RAM budget (MiB) for silhouette pairwise-distance computation.
+# Silhouette on large datasets streams distances in chunks of shape (chunk_rows, n).
+# Lower this if you hit MemoryError; raise it on machines with more RAM for fewer,
+# larger chunks. Result is bit-identical regardless of value.
+SILHOUETTE_WORKING_MEMORY_MIB = 128
 
 
 # =============================================================================
@@ -154,12 +162,13 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   if(len(recap['clusters'].unique()) > 1):
     # Use scaled feature_matrix if provided (matches the space clustering was done in)
     # Otherwise fall back to raw feature columns (less accurate silhouette)
-    if distance_matrix is not None:
-      # Gower clustering: use precomputed distance matrix (metric="precomputed")
-      silhouette_val = silhouette_samples(distance_matrix, clusters, metric="precomputed")
-    else:
-      X_for_silhouette = feature_matrix if feature_matrix is not None else data_result[feature_set].values
-      silhouette_val = silhouette_samples(X_for_silhouette, clusters)
+    with config_context(working_memory=SILHOUETTE_WORKING_MEMORY_MIB):
+      if distance_matrix is not None:
+        # Gower clustering: use precomputed distance matrix (metric="precomputed")
+        silhouette_val = silhouette_samples(distance_matrix, clusters, metric="precomputed")
+      else:
+        X_for_silhouette = feature_matrix if feature_matrix is not None else data_result[feature_set].values
+        silhouette_val = silhouette_samples(X_for_silhouette, clusters)
 
   for c in recap['clusters']:
     # Get in-cluster data

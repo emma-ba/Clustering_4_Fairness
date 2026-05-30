@@ -12,7 +12,6 @@ from src.scoring import (
     make_chi2_sensitive_scorer, make_composite_scorer,
 )
 from src.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
-from src.fairness_metrics import evaluate_fairness, print_fairness_report
 from src.experiments import (
     create_exp_conditions,
     run_experiments_generic, make_recap, make_chi_tests,
@@ -933,18 +932,6 @@ def main():
     if result.calinski_harabasz is not None:
         print(f"  Calinski-Harabasz: {result.calinski_harabasz:.1f}")
     print(f"  Cluster sizes: {result.cluster_sizes}")
-
-    # Fairness evaluation (binary dummies + multi-class dummies from sensitive_cols_analysis)
-    if sensitive_cols_analysis:
-        print(f"\nFairness evaluation:")
-        for attr_name in sensitive_cols_analysis:
-            if attr_name in continuous_sensitive_cols:
-                continue
-            attr_for_eval = df[attr_name].values
-            if result.mask is not None:
-                attr_for_eval = attr_for_eval[result.mask]
-            metrics = evaluate_fairness(result, attr_for_eval, attr_name)
-            print(print_fairness_report(metrics, attr_name, attribute_labels=None))
 
     # Build recap table (error stats, sensitive proportions, diff_vs_rest, p-values)
     if args.error_col and result.n_clusters > 1:
