@@ -907,7 +907,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             standardize=True, error_label=None,
                             original_sensitive_cols=None,
                             continuous_sensitive_cols=None,
-                            ohe_col_names=None):
+                            ohe_col_names=None,
+                            method="alternate"):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -994,6 +995,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
         categorical_features=cat_features,
         standardize=standardize,
         ohe_features=ohe_feature_indices,
+        method=method,
     )
 
     sil_str = f", silhouette={result.silhouette:.3f}" if result.silhouette is not None else ""

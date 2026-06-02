@@ -94,6 +94,12 @@ def parse_args():
                         choices=["dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kmedoids", "kprototypes"],
                         help="Clustering algorithm")
 
+    parser.add_argument("--method", type=str, default="alternate",
+                        choices=["alternate", "pam"],
+                        help="KMedoids solver only (ignored by other algorithms). 'alternate' "
+                             "(default) is fast but collapses on heavily-tied distances; 'pam' is "
+                             "slower but robust — recommended with --distance gower on categorical data.")
+
     # Distance metric
     parser.add_argument("--distance", type=str, default="euclidean",
                         choices=["euclidean", "manhattan", "gower"],
@@ -397,6 +403,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         original_sensitive_cols=original_sensitive_cols,
         continuous_sensitive_cols=continuous_sensitive_cols,
         ohe_col_names=ohe_col_names,
+        method=args.method,
     )
 
     # Print progress for each condition
@@ -929,6 +936,7 @@ def main():
         scoring_fn=scoring_fn,
         standardize=not args.no_standardize,
         ohe_features=ohe_feature_indices,
+        method=args.method,
     )
 
     # Results

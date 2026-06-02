@@ -123,6 +123,7 @@ def _find_best_k(
     categorical_features: Optional[list] = None,
     weights: Optional[np.ndarray] = None,
     kmedoids_metric: Optional[str] = None,
+    method: str = "alternate",
 ) -> tuple:
     """
     Search for the best k in [n_min, n_max] using the given scoring function.
@@ -164,7 +165,7 @@ def _find_best_k(
             clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X_fit)
         elif algorithm == "kmedoids":
-            clusterer = KMedoids(n_clusters=k, metric=kmedoids_metric, random_state=random_state, max_iter=max_iter)
+            clusterer = KMedoids(n_clusters=k, metric=kmedoids_metric, method=method, random_state=random_state, max_iter=max_iter)
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn_extra")
                 labels = clusterer.fit_predict(X_fit)
@@ -208,6 +209,7 @@ def cluster(
     min_datapoints: Optional[int] = None,
     scoring_fn: Optional[ScoringFn] = None,
     ohe_features: Optional[list[int]] = None,
+    method: str = "alternate",
 ) -> ClusteringResult:
     """
     Perform clustering on features with flexible configuration.
@@ -403,7 +405,7 @@ def cluster(
                 clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kmedoids":
-                clusterer = KMedoids(n_clusters=n_clusters, metric=kmedoids_metric, random_state=random_state, max_iter=max_iter)
+                clusterer = KMedoids(n_clusters=n_clusters, metric=kmedoids_metric, method=method, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kprototypes":
                 kp_kwargs = dict(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)
@@ -420,6 +422,7 @@ def cluster(
                 categorical_features=categorical_features,
                 weights=weights,
                 kmedoids_metric=kmedoids_metric,
+                method=method,
             )
             print(f"  Best k={best_k} (score={best_score:.3f})")
 
