@@ -17,9 +17,35 @@ from dataclasses import dataclass
 from sklearn.cluster import DBSCAN, HDBSCAN, KMeans, BisectingKMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
-from kmodes.kprototypes import KPrototypes, euclidean_dissim, matching_dissim
+from kmodes.kprototypes import KPrototypes
 from sklearn_extra.cluster import KMedoids
 from .scoring import ScoringFn, silhouette_scorer
+
+
+def _make_kmedoids(n_clusters, metric, method, random_state, max_iter):
+    """Construct a KMedoids clusterer for the given solver.
+
+    'alternate'/'pam' use sklearn_extra. 'fasterpam' uses the separate `kmedoids`
+    package — same medoid quality as PAM but O(n²) per iteration regardless of k,
+    so it scales to large n where plain PAM is infeasible. Imported lazily so the
+    dependency is only needed when --method fasterpam is actually used.
+    """
+    if method == "fasterpam":
+        try:
+            import kmedoids as _kmedoids_pkg
+        except ImportError as e:
+            raise ImportError(
+                "--method fasterpam requires the 'kmedoids' package. "
+                "Install it with: pip install kmedoids"
+            ) from e
+        return _kmedoids_pkg.KMedoids(
+            n_clusters=n_clusters, metric=metric, method="fasterpam",
+            random_state=random_state, max_iter=max_iter,
+        )
+    return KMedoids(
+        n_clusters=n_clusters, metric=metric, method=method,
+        random_state=random_state, max_iter=max_iter,
+    )
 @dataclass
 class ClusteringResult:
     """Container for clustering results and evaluation metrics."""
@@ -165,7 +191,7 @@ def _find_best_k(
             clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X_fit)
         elif algorithm == "kmedoids":
-            clusterer = KMedoids(n_clusters=k, metric=kmedoids_metric, method=method, random_state=random_state, max_iter=max_iter)
+            clusterer = _make_kmedoids(k, kmedoids_metric, method, random_state, max_iter)
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn_extra")
                 labels = clusterer.fit_predict(X_fit)
@@ -405,7 +431,7 @@ def cluster(
                 clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kmedoids":
-                clusterer = KMedoids(n_clusters=n_clusters, metric=kmedoids_metric, method=method, random_state=random_state, max_iter=max_iter)
+                clusterer = _make_kmedoids(n_clusters, kmedoids_metric, method, random_state, max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kprototypes":
                 kp_kwargs = dict(n_clusters=n_clusters, random_state=random_state, n_init=10, max_iter=max_iter)

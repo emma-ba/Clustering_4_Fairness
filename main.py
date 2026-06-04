@@ -95,10 +95,13 @@ def parse_args():
                         help="Clustering algorithm")
 
     parser.add_argument("--method", type=str, default="alternate",
-                        choices=["alternate", "pam"],
+                        choices=["alternate", "pam", "fasterpam"],
                         help="KMedoids solver only (ignored by other algorithms). 'alternate' "
                              "(default) is fast but collapses on heavily-tied distances; 'pam' is "
-                             "slower but robust — recommended with --distance gower on categorical data.")
+                             "robust but O(k·n²)/iter — too slow on large n; 'fasterpam' gives "
+                             "PAM-quality results at O(n²)/iter, so it scales to large n. Use "
+                             "'fasterpam' with --distance gower on categorical data (needs the "
+                             "'kmedoids' package).")
 
     # Distance metric
     parser.add_argument("--distance", type=str, default="euclidean",
