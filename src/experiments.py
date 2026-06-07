@@ -616,19 +616,27 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
     error_label = 'error'
   continuous_sensitive_cols = set(continuous_sensitive_cols or [])
 
-  skip_cols = {'cond_descr', 'cond_name', error_label}
-  actual_sensitive = [c for c in chi_res.columns if c not in skip_cols]
-
   all_quali = {'cond_descr': chi_res['cond_descr'],
                'cond_name': chi_res['cond_name'],
                error_label: chi_res[error_label]}
-  for col in actual_sensitive:
-    all_quali[col] = chi_res[col]
-  all_quali['silhouette'] = []
 
   orig_cols = original_sensitive_cols or sensitive_cols or []
   categorical_orig = [c for c in orig_cols if c not in continuous_sensitive_cols]
   numeric_orig = [c for c in orig_cols if c in continuous_sensitive_cols]
+
+  # One p-value per sensitive feature for the cross-condition heatmap. Categorical
+  # features (binary or multi-class) get a single omnibus chi-square over the
+  # (categories x clusters) contingency table — filled per condition in the loop
+  # below. This keeps the heatmap to one column per feature; the full per-category
+  # breakdown (one-vs-rest, FDR-corrected) remains in chi_res.csv. Continuous
+  # sensitive features keep their Kruskal-Wallis p from chi_res.
+  for col in categorical_orig:
+    all_quali[col] = []
+  for col in numeric_orig:
+    if col in chi_res.columns:
+      all_quali[col] = list(chi_res[col])
+  all_quali['silhouette'] = []
+
   for col in categorical_orig:
     all_quali[f'{col}_overall_entropy'] = []
     all_quali[f'{col}_entropy_avg'] = []
@@ -645,6 +653,7 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
     if single_cluster:
       all_quali['silhouette'].append(np.nan)
       for col in categorical_orig:
+        all_quali[col].append(np.nan)
         all_quali[f'{col}_overall_entropy'].append(np.nan)
         all_quali[f'{col}_entropy_avg'].append(np.nan)
         all_quali[f'{col}_repr_ratio_avg'].append(np.nan)
@@ -668,6 +677,28 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
         all_quali[f'{col}_avg_range'].append(np.nan)
 
     for col in categorical_orig:
+      # Omnibus chi-square p for this feature: (categories x clusters) contingency
+      # built from per-cluster category counts. Binary features collapse to a
+      # [in-group, out-group] x clusters table (equivalent to the one-vs-rest test).
+      cat_n_cols = [c for c in recap.columns if c.startswith(f'{col}_') and c.endswith('_n')]
+      p_omni = np.nan
+      try:
+        if len(cat_n_cols) == 1:
+          in_n = recap[cat_n_cols[0]].values.astype(float)
+          table = np.vstack([in_n, recap['count'].values.astype(float) - in_n])
+        elif len(cat_n_cols) >= 2:
+          table = recap[cat_n_cols].values.astype(float).T
+        else:
+          table = None
+        if table is not None:
+          table = table[table.sum(axis=1) > 0]
+          table = table[:, table.sum(axis=0) > 0]
+          if table.shape[0] >= 2 and table.shape[1] >= 2:
+            p_omni = round(float(chi2_contingency(table)[1]), 6)
+      except Exception:
+        p_omni = np.nan
+      all_quali[col].append(p_omni)
+
       # Overall entropy: entropy of the population distribution for this col
       try:
         if col in res_df.columns:

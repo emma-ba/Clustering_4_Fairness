@@ -305,8 +305,11 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
 
     # For fairness analysis, the multi-class dummies of *sensitive* originals are still
     # needed (proportions, chi2, entropy, balance score). Build the full analysis list
-    # by adding them back on top of the (binary-only) sensitive_cols.
-    sensitive_cols_analysis = list(sensitive_cols)
+    # by adding them back on top of the (binary-only) sensitive_cols. The multi-class
+    # originals themselves are dropped from the analysis list: under --distance gower
+    # they remain in sensitive_cols as factorized codes (for the distance), and analysing
+    # those codes would misread them as continuous — we analyse their dummies instead.
+    sensitive_cols_analysis = [c for c in sensitive_cols if c not in multiclass_dummies]
     for orig_col, dummies in multiclass_dummies.items():
         if orig_col in original_sensitive_cols:
             sensitive_cols_analysis.extend(dummies)
@@ -834,8 +837,11 @@ def main():
     proxy_cols = col_lists['proxy']
     special_cols = col_lists['special']
 
-    # Full sensitive list for fairness analysis (binary + multi-class dummies)
-    sensitive_cols_analysis = list(sensitive_cols)
+    # Full sensitive list for fairness analysis (binary + multi-class dummies).
+    # Multi-class originals are dropped here: under --distance gower they stay in
+    # sensitive_cols as factorized codes for the distance and must not be analysed as
+    # continuous — their readable dummies are analysed instead.
+    sensitive_cols_analysis = [c for c in sensitive_cols if c not in multiclass_dummies]
     for orig_col, dummies in multiclass_dummies.items():
         if orig_col in original_sensitive_cols:
             sensitive_cols_analysis.extend(dummies)

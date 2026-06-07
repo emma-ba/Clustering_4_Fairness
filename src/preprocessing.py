@@ -70,16 +70,36 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
 
     if distance == 'gower':
         df_encoded = df.copy()
+        sensitive_set = set(col_lists.get('sensitive', []))
+        multiclass_dummies = {}
         for col in sorted(categorical_col_names):
             if col not in df_encoded.columns:
                 continue
+            # For multi-class *sensitive* columns, emit readable one-hot dummies for
+            # downstream fairness analysis (proportions / repr-ratio / entropy / chi2).
+            # These are NOT added to any feature group, so they leave the Gower distance
+            # untouched — the factorized code column below is what clustering uses. This
+            # is what stops region/imd_band/age_band being misread as continuous.
+            if col in sensitive_set and df_encoded[col].nunique(dropna=True) > 2:
+                dummies = pd.get_dummies(df_encoded[col], prefix=col).astype('int8')
+                dummy_cols = list(dummies.columns)
+                collisions = (set(df_encoded.columns) - {col}) & set(dummy_cols)
+                if collisions:
+                    raise ValueError(
+                        f"One-hot encoding '{col}' for fairness analysis would create "
+                        f"columns {sorted(collisions)} that already exist. Rename or "
+                        f"remove those columns before encoding."
+                    )
+                df_encoded = pd.concat([df_encoded, dummies], axis=1)
+                multiclass_dummies[col] = dummy_cols
+            # Factorize the original column to numeric codes for the Gower distance.
             dtype = df_encoded[col].dtype
             if dtype.kind in ('O', 'U', 'S') or dtype.name in ('category', 'string'):
                 codes, _ = pd.factorize(df_encoded[col])
                 codes = codes.astype(float)
                 codes[codes < 0] = np.nan
                 df_encoded[col] = codes
-        return df_encoded, col_lists, list(categorical_col_names), {}, []
+        return df_encoded, col_lists, list(categorical_col_names), multiclass_dummies, []
 
     if not categorical_col_names:
         return df, col_lists, [], {}, []
