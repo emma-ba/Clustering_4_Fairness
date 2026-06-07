@@ -21,7 +21,11 @@ from scipy import stats
 from scipy.stats import chi2_contingency, kruskal, mannwhitneyu, false_discovery_control
 from itertools import combinations
 from .clustering import cluster
-from .fairness_metrics import cluster_proportion, one_vs_all_p_binary, one_vs_all_p_continuous, mean_diff
+from .fairness_metrics import (
+    cluster_proportion, one_vs_all_p_binary, one_vs_all_p_continuous, mean_diff,
+    feature_kind, cluster_value, overview_gap, onevsall_gap,
+    omnibus_separability_p, onevsall_categorical_p,
+)
 
 
 # Per-chunk RAM budget (MiB) for silhouette pairwise-distance computation.
@@ -35,48 +39,17 @@ SILHOUETTE_WORKING_MEMORY_MIB = 128
 # Utils for Results - Recap
 # =============================================================================
 
-def _expand_multiclass_cols(data, sensitive_cols):
-  """
-  Expand non-binary sensitive columns into per-value binary indicators.
-
-  For columns with more than 2 unique values, creates binary columns
-  named '{col}={value}' for each unique value. Binary columns are kept as-is.
-
-  Returns (data_copy, expanded_cols) where expanded_cols replaces the
-  original multi-class columns with their indicator names.
-  """
-  data = data.copy()
-  expanded_cols = []
-  for col in sensitive_cols:
-    unique_vals = sorted(data[col].dropna().unique())
-    if len(unique_vals) <= 2:
-      # Binary or single-value column — keep as-is
-      expanded_cols.append(col)
-    else:
-      print(f"  Expanded sensitive col '{col}' into {len(unique_vals)} categorical indicators.")
-      # Multi-class: create per-value binary indicators
-      indicator_names = []
-      for val in unique_vals:
-        indicator_name = f'{col}={val}'
-        data[indicator_name] = (data[col] == val).astype(int)
-        expanded_cols.append(indicator_name)
-        indicator_names.append(indicator_name)
-      # OOD check: each row should belong to at most one category
-      row_sums = data[indicator_names].sum(axis=1)
-      if (row_sums > 1).any():
-        raise ValueError(
-          f"Sensitive column '{col}' has rows assigned to multiple categories "
-          f"after expansion. Check for overlapping values in the data."
-        )
-      n_nan = (row_sums == 0).sum()
-      if n_nan > 0:
-        print(f"  Warning: {n_nan} rows with missing value in '{col}' — assigned 0 for all indicators.")
-  return data, expanded_cols
-
-
 def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None):
   """
-  Create recap of cluster info with error rates and sensitive feature proportions.
+  Create a per-cluster Detail recap of cluster info, error stats, and per-feature
+  one-vs-all fairness metrics.
+
+  Emits one row per non-noise cluster with columns:
+    c, count, proportion, silh, <error value col(s)>, error_sep, error_gap,
+    and for each sensitive feature F: F_value, F_sep, F_gap.
+
+  Each sensitive feature is classified ONCE (binary / multicat / numeric) via
+  feature_kind() and represented by a SINGLE column trio — no one-hot expansion.
 
   Parameters
   ----------
@@ -85,30 +58,17 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   feature_set : list
       Feature columns used for clustering (for silhouette computation).
   sensitive_cols : list, optional
-      Sensitive columns to compute proportions for. Both binary (0/1) and
-      multi-class columns are supported. Multi-class columns are auto-expanded
-      into per-value binary indicators.
+      Sensitive columns to report. One F_value/F_sep/F_gap trio per column.
   error_col : str
       Name of the error column. Default 'errors'.
   error_type : str
       'binary' for classification errors (0/1), 'regression' for continuous errors.
+  continuous_sensitive_cols : list, optional
+      Columns to treat as numeric (median-based) regardless of cardinality.
   """
   if sensitive_cols is None:
     sensitive_cols = []
-  continuous_sensitive_cols = set(continuous_sensitive_cols or [])
-
-  _auto_continuous = []
-  for col in sensitive_cols:
-    if col in continuous_sensitive_cols:
-      continue
-    if col in data_result.columns and data_result[col].dtype.kind == 'f' and data_result[col].nunique() > 2:
-      continuous_sensitive_cols.add(col)
-      _auto_continuous.append(col)
-  if _auto_continuous:
-    print(f"  Auto-detected as continuous (float dtype): {', '.join(_auto_continuous)}")
-
-  numeric_sensitive_cols = [c for c in sensitive_cols if c in continuous_sensitive_cols]
-  categorical_sensitive_cols = [c for c in sensitive_cols if c not in continuous_sensitive_cols]
+  continuous_set = set(continuous_sensitive_cols or [])
 
   # Exclude noise points (cluster label -1 from DBSCAN/HDBSCAN) before any computation
   noise_mask = data_result['clusters'] != -1
@@ -116,13 +76,12 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   if feature_matrix is not None:
     feature_matrix = feature_matrix[noise_mask.values]
 
-  # Expand multi-class sensitive columns into binary indicators
-  data_result, sensitive_cols_expanded = _expand_multiclass_cols(data_result, categorical_sensitive_cols)
-
-  # MAKE RECAP of cluster info
-  # ...with error rates
   if error_col not in data_result.columns:
     raise ValueError(f"error_col '{error_col}' not found in data. Available columns: {list(data_result.columns)}")
+
+  # Classify each sensitive feature ONCE (declaration + cardinality, NOT dtype).
+  kinds = {F: feature_kind(data_result[F], F in continuous_set) for F in sensitive_cols}
+
   res = data_result[['clusters', error_col]]
 
   # ...with cluster size
@@ -131,30 +90,28 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   recap = temp.groupby(['clusters'], as_index=False).sum()
   recap = recap.set_index('clusters', drop=False)
 
+  # ...with proportion of total (non-noise) population
+  recap['proportion'] = recap['count'] / recap['count'].sum()
+
   if error_type == 'regression':
-    # Regression path: signed error stats (bias direction)
+    # Regression path: signed mean (bias direction) + absolute mean (magnitude)
     recap['error_mean'] = res.groupby(['clusters'])[error_col].mean().values
-    recap['error_std'] = res.groupby(['clusters'])[error_col].std().values
-    recap['error_median'] = res.groupby(['clusters'])[error_col].median().values
-    # Absolute error stats (accuracy magnitude)
     recap['abs_error_mean'] = res.groupby(['clusters'])[error_col].apply(lambda x: x.abs().mean()).values
-    recap['abs_error_median'] = res.groupby(['clusters'])[error_col].apply(lambda x: x.abs().median()).values
   else:
-    # Binary path: count-based error stats
-    # ...with number of error
+    # Binary path: per-cluster error count and error rate
     recap['n_error'] = res.groupby(['clusters']).sum().astype(int)
+    recap['error_value'] = res.groupby(['clusters']).mean()
 
-    # ...with 1-vs-All error diff
-    recap['error_rate'] = res.groupby(['clusters']).mean()
+  # Per-feature global positive value (binary): use the GLOBAL max so that an
+  # all-zero cluster doesn't miscount which value is "positive".
+  global_pos = {F: data_result[F].max() for F in sensitive_cols if kinds[F] == 'binary'}
 
-  # Prepare Quality metrics
-  diff_vs_rest = []
-  diff_p = []
-
-  # Dynamic sensitive column tracking (using expanded columns for multi-class support)
-  sensitive_data = {col: {'prop': [], 'diff': [], 'p': []} for col in sensitive_cols_expanded}
-  numeric_data = {col: {'avg': [], 'avg_delta': [], 'p': []} for col in numeric_sensitive_cols}
-
+  # Per-cluster accumulators
+  error_sep = []
+  error_gap = []
+  feat_value = {F: [] for F in sensitive_cols}
+  feat_sep = {F: [] for F in sensitive_cols}
+  feat_gap = {F: [] for F in sensitive_cols}
   silhouette = []
 
   # Get individual silhouette scores
@@ -175,20 +132,19 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     c_data = data_result.loc[data_result['clusters'] == c]
     c_count = recap['count'][c]
 
+    # F_value is always computable (no one-vs-all needed)
+    for F in sensitive_cols:
+      feat_value[F].append(cluster_value(c_data[F], kinds[F]))
+
     # Get out-of-cluster data
     rest_data = data_result.loc[data_result['clusters'] != c]
-    # Check if no other cluster
+    # Single-cluster guard: no one-vs-all possible -> *_sep / *_gap are NaN.
     if(len(rest_data) == 0):
-      diff_vs_rest.append(np.nan)
-      diff_p.append(np.nan)
-      for col in sensitive_cols_expanded:
-        sensitive_data[col]['prop'].append(np.nan)
-        sensitive_data[col]['diff'].append(np.nan)
-        sensitive_data[col]['p'].append(np.nan)
-      for col in numeric_sensitive_cols:
-        numeric_data[col]['avg'].append(np.nan)
-        numeric_data[col]['avg_delta'].append(np.nan)
-        numeric_data[col]['p'].append(np.nan)
+      error_sep.append(np.nan)
+      error_gap.append(np.nan)
+      for F in sensitive_cols:
+        feat_sep[F].append(np.nan)
+        feat_gap[F].append(np.nan)
       silhouette.append(np.nan)
       break
 
@@ -198,84 +154,56 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     rest_recap = recap.loc[recap['clusters'] != c]
     rest_count = rest_recap['count'].sum()
 
-    # Error — one-vs-all diff and p-value
+    # Error — one-vs-all signed gap and separability p-value
     if error_type == 'regression':
       c_errors = c_data[error_col].values
       rest_errors = rest_data[error_col].values
-      diff_vs_rest.append(round(mean_diff(c_errors, rest_errors), 6))
-      diff_p.append(one_vs_all_p_continuous(c_errors, rest_errors))
+      error_gap.append(round(mean_diff(c_errors, rest_errors), 6))
+      error_sep.append(one_vs_all_p_continuous(c_errors, rest_errors))
     else:
       rest_n_error = rest_recap['n_error'].sum()
-      diff_vs_rest.append(recap['error_rate'][c] - rest_n_error / rest_count)
-      diff_p.append(one_vs_all_p_binary(
+      error_gap.append(recap['error_value'][c] - rest_n_error / rest_count)
+      error_sep.append(one_vs_all_p_binary(
           recap['n_error'][c], recap['count'][c], rest_n_error, rest_count
       ))
 
-    # Binary sensitive features — one-vs-all proportion, diff, p-value
-    for col in sensitive_cols_expanded:
-      c_n = c_data[col].sum()
-      rest_n = rest_data[col].sum()
-      c_prop = cluster_proportion(c_n, c_count)
-      rest_prop = cluster_proportion(rest_n, rest_count)
-      sensitive_data[col]['prop'].append(round(c_prop, 4))
-      sensitive_data[col]['diff'].append(round(c_prop - rest_prop, 4))
-      sensitive_data[col]['p'].append(one_vs_all_p_binary(c_n, c_count, rest_n, rest_count))
-
-    # Numeric sensitive features — one-vs-all mean, diff, p-value
-    for col in numeric_sensitive_cols:
-      c_vals = c_data[col].dropna().values
-      rest_vals = rest_data[col].dropna().values
-      if len(c_vals) == 0 or len(rest_vals) == 0:
-        numeric_data[col]['avg'].append(np.nan)
-        numeric_data[col]['avg_delta'].append(np.nan)
-        numeric_data[col]['p'].append(np.nan)
-        continue
-      numeric_data[col]['avg'].append(round(float(c_vals.mean()), 4))
-      numeric_data[col]['avg_delta'].append(round(mean_diff(c_vals, rest_vals), 4))
-      numeric_data[col]['p'].append(one_vs_all_p_continuous(c_vals, rest_vals))
+    # Per-feature one-vs-all separability (sep) and signed gap.
+    for F in sensitive_cols:
+      kind = kinds[F]
+      c_vals = c_data[F]
+      rest_vals = rest_data[F]
+      feat_gap[F].append(round(onevsall_gap(c_vals, rest_vals, kind), 4))
+      if kind == 'binary':
+        pos = global_pos[F]
+        c_pos = int((c_vals == pos).sum())
+        rest_pos = int((rest_vals == pos).sum())
+        feat_sep[F].append(one_vs_all_p_binary(c_pos, len(c_vals), rest_pos, len(rest_vals)))
+      elif kind == 'multicat':
+        feat_sep[F].append(onevsall_categorical_p(c_vals, rest_vals))
+      else:  # numeric
+        feat_sep[F].append(one_vs_all_p_continuous(c_vals.dropna().values, rest_vals.dropna().values))
 
   # Collect all new columns into a dict then concat once to avoid fragmentation
   new_cols = {
-      'diff_vs_rest': np.around(diff_vs_rest, 3),
-      'mannwhitney_p': diff_p,
+      'error_sep': error_sep,
+      'error_gap': np.around(error_gap, 3),
   }
-
-  for col in sensitive_cols_expanded:
-    new_cols[f'{col}_prop'] = sensitive_data[col]['prop']
-    new_cols[f'{col}_diff'] = sensitive_data[col]['diff']
-    new_cols[f'{col}_p'] = sensitive_data[col]['p']
-
-  for col in numeric_sensitive_cols:
-    new_cols[f'{col}_avg'] = numeric_data[col]['avg']
-    new_cols[f'{col}_avg_delta'] = numeric_data[col]['avg_delta']
-    new_cols[f'{col}_p'] = numeric_data[col]['p']
-
-  new_cols['silhouette'] = silhouette
+  for F in sensitive_cols:
+    new_cols[f'{F}_value'] = feat_value[F]
+    new_cols[f'{F}_sep'] = feat_sep[F]
+    new_cols[f'{F}_gap'] = feat_gap[F]
+  new_cols['silh'] = silhouette
 
   recap = pd.concat([recap, pd.DataFrame(new_cols, index=recap.index)], axis=1)
 
   if error_type == 'regression':
     recap['error_mean'] = np.around(recap['error_mean'], 3)
-    recap['error_std'] = np.around(recap['error_std'], 3)
-    recap['error_median'] = np.around(recap['error_median'], 3)
     recap['abs_error_mean'] = np.around(recap['abs_error_mean'], 3)
-    recap['abs_error_median'] = np.around(recap['abs_error_median'], 3)
   else:
-    recap['error_rate'] = np.around(recap['error_rate'], 3)
+    recap['error_value'] = np.around(recap['error_value'], 3)
 
   recap = recap.reset_index(drop=True)
   recap.rename(columns={'clusters': 'c'}, inplace=True)
-
-  # Rename error columns after all processing is done
-  if error_label is not None:
-    rename_map = {}
-    for src in ['error_rate', 'error_mean', 'error_std', 'error_median',
-                'abs_error_mean', 'abs_error_median']:
-      if src in recap.columns:
-        new_name = src.replace('error', error_label, 1)
-        rename_map[src] = new_name
-    if rename_map:
-      recap = recap.rename(columns=rename_map)
 
   return recap
 
@@ -357,175 +285,80 @@ def separability_check(data, labels, columns):
 # Utils for Results - Chi-Square Tests
 # =============================================================================
 
-def _get_sensitive_cols_from_recap(recap, sensitive_cols):
-  """
-  Determine the actual sensitive column names present in the recap.
-
-  If make_recap expanded multi-class columns (e.g., 'race' -> 'race=0', 'race=1'),
-  find those expanded names. Otherwise return the original column names.
-  """
-  actual_cols = []
-  for col in sensitive_cols:
-    if f'{col}_prop' in recap.columns:
-      actual_cols.append(col)
-    else:
-      # Look for expanded multi-class indicators (col=value pattern)
-      expanded = [c.replace('_prop', '') for c in recap.columns
-                  if c.startswith(f'{col}=') and c.endswith('_prop')]
-      actual_cols.extend(expanded)
-  return actual_cols
-
-
 def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', error_label=None, continuous_sensitive_cols=None):
   """
-  Run chi-squared / Kruskal-Wallis tests on cluster recaps for error and sensitive columns.
+  Compute one omnibus separability p-value per condition for the error column
+  and for each sensitive feature.
 
-  Supports both binary and multi-class sensitive columns. For multi-class
-  columns that were expanded by make_recap(), builds a full multi-row
-  contingency table across all values.
-
-  For regression errors, uses Kruskal-Wallis H-test on raw error values
-  instead of chi-squared on contingency tables.
+  Each sensitive feature is classified ONCE (binary / multicat / numeric) via
+  feature_kind() and gets a single `<F>_sep` column. The error column gets an
+  `error_sep` column (Kruskal-Wallis for regression, otherwise treated as
+  binary/categorical via chi2). Benjamini-Hochberg FDR correction is applied
+  ACROSS the `<F>_sep` columns within each row.
 
   Parameters
   ----------
   results : dict
       Results from run_experiments_generic().
   sensitive_cols : list, optional
-      Original sensitive column names.
+      Sensitive column names. One `<F>_sep` column per feature.
   error_type : str
-      'binary' for chi-squared on error counts, 'regression' for Kruskal-Wallis on raw errors.
+      'binary' (error treated as binary) or 'regression' (error treated as numeric).
   error_col : str
-      Name of the error column in the data. Used for regression path.
+      Name of the error column in the per-condition result DataFrames.
   error_label : str, optional
-      Display name for the error column in output tables. Defaults to 'error'.
+      Unused for column naming (kept for signature compatibility).
+  continuous_sensitive_cols : list, optional
+      Subset of sensitive_cols to treat as numeric regardless of cardinality.
+
+  Returns
+  -------
+  pd.DataFrame
+      Columns: cond_descr, cond_name, error_sep, <F>_sep (one per sensitive feature).
   """
   if sensitive_cols is None:
     sensitive_cols = []
-  if error_label is None:
-    error_label = 'error'
-  continuous_sensitive_cols = set(continuous_sensitive_cols or [])
+  continuous_set = set(continuous_sensitive_cols or [])
 
-  categorical_input = [c for c in sensitive_cols if c not in continuous_sensitive_cols]
-  numeric_input = [c for c in sensitive_cols if c in continuous_sensitive_cols]
+  error_kind = 'numeric' if error_type == 'regression' else 'binary'
+  sep_cols = [f'{F}_sep' for F in sensitive_cols]
 
-  # Determine actual categorical columns from first recap (handles multi-class expansion)
-  if len(results['cond_recap']) > 0:
-    actual_categorical = _get_sensitive_cols_from_recap(results['cond_recap'][0], categorical_input)
-  else:
-    actual_categorical = categorical_input
-  actual_sensitive = actual_categorical + numeric_input
-
-  chi_res = {'cond_descr': [],
-            'cond_name': [],
-            error_label: []}
-  for col in actual_sensitive:
-    chi_res[col] = []
+  chi_res = {'cond_descr': [], 'cond_name': [], 'error_sep': []}
+  for sc in sep_cols:
+    chi_res[sc] = []
 
   for i in range(0, len(results['cond_name'])):
     chi_res['cond_descr'].append(results['cond_descr'][i])
     chi_res['cond_name'].append(results['cond_name'][i])
-    recap = results['cond_recap'][i]
 
-    if(len(recap['mannwhitney_p']) == 1):
-      chi_res[error_label].append(np.nan)
-      for col in actual_sensitive:
-        chi_res[col].append(np.nan)
+    res_df = results['cond_res'][i]
+    labels = res_df['clusters'].values
+
+    # Single-cluster guard: < 2 non-noise clusters -> all-NaN row.
+    if len(set(labels) - {-1}) < 2:
+      chi_res['error_sep'].append(np.nan)
+      for sc in sep_cols:
+        chi_res[sc].append(np.nan)
       continue
 
-    # Test error differences
-    if error_type == 'regression':
-      # Kruskal-Wallis on raw continuous error values grouped by cluster
-      res_df = results['cond_res'][i]
-      cluster_labels = res_df['clusters'].values
-      unique_clusters = sorted(set(cluster_labels) - {-1})
-      groups = [res_df.loc[res_df['clusters'] == cl, error_col].values for cl in unique_clusters]
-      groups = [g for g in groups if len(g) > 0]
-      if len(groups) >= 2:
-        try:
-          _, p = kruskal(*groups)
-          chi_res[error_label].append(round(p, 6))
-        except ValueError:
-          chi_res[error_label].append(np.nan)
-      else:
-        chi_res[error_label].append(np.nan)
-    else:
-      # Binary: chi-squared on [n_correct, n_error] contingency table
-      test_data = recap[['count', 'n_error']].copy(deep=True)
-      test_data['count'] = test_data['count'] - test_data['n_error']
-      test_data = test_data.rename(columns={"count": "n_correct"})
-      test_data = test_data.transpose()
-      
-      if (test_data.sum(axis=1) == 0).any():
-        # Zero row in contingency table — fall back to Kruskal-Wallis on raw error values
-        res_df = results['cond_res'][i]
-        if error_col not in res_df.columns:
-          chi_res[error_label].append(np.nan)
-          for col in actual_sensitive:
-            chi_res[col].append(np.nan)
-          continue
-        cluster_labels = res_df['clusters'].values
-        unique_clusters = sorted(set(cluster_labels) - {-1})
-        groups = [res_df.loc[res_df['clusters'] == cl, error_col].values for cl in unique_clusters]
-        groups = [g for g in groups if len(g) > 0]
-        if len(groups) >= 2:
-          try:
-            _, p = kruskal(*groups)
-            chi_res[error_label].append(round(p, 6))
-          except ValueError:
-            chi_res[error_label].append(np.nan)
-        else:
-          chi_res[error_label].append(np.nan)
-      else:
-        test_res = chi2_contingency(test_data)
-        chi_res[error_label].append(round(test_res.pvalue, 6))
-
-    numeric_set = set(numeric_input)
-    res_df = results['cond_res'][i]
-    for col in actual_sensitive:
-      if col in numeric_set:
-        if col not in res_df.columns:
-          chi_res[col].append(np.nan)
-          continue
-        cluster_labels = res_df['clusters'].values
-        unique_clusters = sorted(set(cluster_labels) - {-1})
-        groups = [res_df.loc[res_df['clusters'] == cl, col].dropna().values
-                  for cl in unique_clusters]
-        groups = [g for g in groups if len(g) > 0]
-        if len(groups) >= 2:
-          try:
-            _, p = kruskal(*groups)
-            chi_res[col].append(round(float(p), 6))
-          except ValueError:
-            chi_res[col].append(np.nan)
-        else:
-          chi_res[col].append(np.nan)
-        continue
-
-      n_col = f'{col}_n'
-      if n_col not in recap.columns:
-        chi_res[col].append(np.nan)
-        continue
-      test_data = recap[['count', n_col]].copy(deep=True).astype(int)
-      test_data['count'] = test_data['count'] - test_data[n_col]
-      test_data = test_data.rename(columns={'count': f'not_{col}_n'})
-      test_data = test_data.transpose()
-      if (test_data.sum(axis=1) == 0).any():
-        chi_res[col].append(np.nan)
-      else:
-        test_res = chi2_contingency(test_data)
-        chi_res[col].append(round(test_res.pvalue, 6))
+    chi_res['error_sep'].append(
+        omnibus_separability_p(res_df[error_col], labels, error_kind)
+    )
+    for F in sensitive_cols:
+      kind = feature_kind(res_df[F], F in continuous_set)
+      chi_res[f'{F}_sep'].append(omnibus_separability_p(res_df[F], labels, kind))
 
   chi_df = pd.DataFrame(chi_res)
 
-  if actual_sensitive and len(chi_df) > 0:
+  # Benjamini-Hochberg FDR correction across the <F>_sep columns of each row.
+  if sep_cols and len(chi_df) > 0:
     for i in chi_df.index:
-      row_p = chi_df.loc[i, actual_sensitive].values.astype(float)
+      row_p = chi_df.loc[i, sep_cols].values.astype(float)
       valid_mask = ~np.isnan(row_p)
       if valid_mask.sum() > 1:
         corrected = false_discovery_control(row_p[valid_mask], method='bh')
         row_p[valid_mask] = np.round(corrected, 6)
-        chi_df.loc[i, actual_sensitive] = row_p
+        chi_df.loc[i, sep_cols] = row_p
 
   return chi_df
 
@@ -534,71 +367,70 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 # Utils for Results - All Quality Metrics
 # =============================================================================
 
-def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None):
+def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary'):
   """
-  Combine chi-squared results with silhouette scores, entropy, and balance scores.
+  Build the Overview frame: per-condition silhouette, separability p-values
+  (copied from chi_res) and across-cluster gaps (spread of the error column and
+  each sensitive feature).
+
+  Output columns (in order):
+    cond_descr, cond_name, silh, error_sep, error_gap, <F>_sep, <F>_gap
 
   Parameters
   ----------
   chi_res : pd.DataFrame
-      Chi-squared test results.
+      Output of make_chi_tests (provides error_sep and <F>_sep).
   results : dict
       Results from run_experiments_generic().
   exp_condition : pd.DataFrame
-      Experimental conditions.
+      Experimental conditions (unused, kept for signature compatibility).
   sensitive_cols : list, optional
-      Original sensitive column names. Actual columns used are inferred from
-      chi_res (which may contain expanded multi-class indicator names).
-  original_sensitive_cols : list, optional
-      Pre-encoding sensitive column names.
-  error_label : str, optional
-      Display name for the error column (used as key in chi_res).
+      Sensitive column names. One <F>_sep/<F>_gap pair per feature.
+  continuous_sensitive_cols : list, optional
+      Subset of sensitive_cols to treat as numeric regardless of cardinality.
+  error_col : str
+      Name of the error column in the per-condition result DataFrames.
+  error_type : str
+      'binary' or 'regression' (controls the error gap kind).
   """
-  if error_label is None:
-    error_label = 'error'
-  continuous_sensitive_cols = set(continuous_sensitive_cols or [])
+  if sensitive_cols is None:
+    sensitive_cols = []
+  continuous_set = set(continuous_sensitive_cols or [])
+  error_kind = 'numeric' if error_type == 'regression' else 'binary'
 
-  skip_cols = {'cond_descr', 'cond_name', error_label}
-  actual_sensitive = [c for c in chi_res.columns if c not in skip_cols]
-
-  all_quali = {'cond_descr': chi_res['cond_descr'],
-               'cond_name': chi_res['cond_name'],
-               error_label: chi_res[error_label]}
-  for col in actual_sensitive:
-    all_quali[col] = chi_res[col]
-  all_quali['silhouette'] = []
-
-  orig_cols = original_sensitive_cols or sensitive_cols or []
-  categorical_orig = [c for c in orig_cols if c not in continuous_sensitive_cols]
-  numeric_orig = [c for c in orig_cols if c in continuous_sensitive_cols]
-  for col in numeric_orig:
-    all_quali[f'{col}_avg_range'] = []
+  silh = []
+  error_gap = []
+  feat_gap = {F: [] for F in sensitive_cols}
 
   for i in range(0, len(chi_res['cond_name'])):
     recap = results['cond_recap'][i]
     res_df = results['cond_res'][i]
-    single_cluster = len(recap['mannwhitney_p']) == 1
+    labels = res_df['clusters'].values
+    single_cluster = len(recap) == 1
 
     if single_cluster:
-      all_quali['silhouette'].append(np.nan)
-      for col in numeric_orig:
-        all_quali[f'{col}_avg_range'].append(np.nan)
+      silh.append(np.nan)
+      error_gap.append(np.nan)
+      for F in sensitive_cols:
+        feat_gap[F].append(np.nan)
       continue
 
-    all_quali['silhouette'].append(recap['silhouette'].mean())
+    silh.append(recap['silh'].mean())
+    error_gap.append(overview_gap(res_df[error_col], labels, error_kind))
+    for F in sensitive_cols:
+      kind = feature_kind(res_df[F], F in continuous_set)
+      feat_gap[F].append(overview_gap(res_df[F], labels, kind))
 
-    labels = res_df['clusters'].values
-    for col in numeric_orig:
-      avg_col = f'{col}_avg'
-      if avg_col in recap.columns:
-        vals = recap[avg_col].dropna().values
-        if len(vals) >= 1:
-          all_quali[f'{col}_avg_range'].append(round(float(vals.max() - vals.min()), 4))
-        else:
-          all_quali[f'{col}_avg_range'].append(np.nan)
-      else:
-        all_quali[f'{col}_avg_range'].append(np.nan)
-
+  all_quali = {
+      'cond_descr': chi_res['cond_descr'].values,
+      'cond_name': chi_res['cond_name'].values,
+      'silh': silh,
+      'error_sep': chi_res['error_sep'].values,
+      'error_gap': error_gap,
+  }
+  for F in sensitive_cols:
+    all_quali[f'{F}_sep'] = chi_res[f'{F}_sep'].values
+    all_quali[f'{F}_gap'] = feat_gap[F]
 
   return pd.DataFrame(all_quali)
 

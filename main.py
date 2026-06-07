@@ -403,7 +403,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     for i, cond_name in enumerate(results['cond_name']):
         recap = results['cond_recap'][i]
         n_clusters = len(recap)
-        silhouette_avg = recap['silhouette'].mean() if 'silhouette' in recap.columns else np.nan
+        silhouette_avg = recap['silh'].mean() if 'silh' in recap.columns else np.nan
         print(f"Condition {i+1}/{len(results['cond_name'])}: {cond_name.strip()}")
         print(f"  Clusters: {n_clusters}, Silhouette: {silhouette_avg:.3f}" if not np.isnan(silhouette_avg) else f"  Clusters: {n_clusters}")
 
@@ -415,14 +415,14 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
-    # Print chi-squared results summary
-    # Use actual sensitive columns from chi_res (may be expanded for multi-class)
-    skip_meta = {'cond_descr', 'cond_name', error_label}
-    actual_sensitive_cols = [c for c in chi_res.columns if c not in skip_meta]
-    print("\nChi-squared test results:")
-    chi_display_cols = ['cond_name', error_label] + actual_sensitive_cols
+    # Print separability test results summary.
+    # chi_res columns: cond_descr, cond_name, error_sep, <F>_sep (one per feature).
+    skip_meta = {'cond_descr', 'cond_name', 'error_sep'}
+    sep_cols = [c for c in chi_res.columns if c not in skip_meta]
+    print("\nSeparability test results (p-values):")
+    chi_display_cols = ['cond_name', 'error_sep'] + sep_cols
     chi_display = chi_res[chi_display_cols].copy()
-    chi_display.columns = ['Condition', error_label] + actual_sensitive_cols
+    chi_display.columns = ['Condition', 'error_sep'] + sep_cols
     print(chi_display.to_string(index=False))
 
     # Generate quality metrics
@@ -430,35 +430,38 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                                     sensitive_cols=sensitive_cols_analysis,
                                     original_sensitive_cols=original_sensitive_cols,
                                     error_label=error_label,
-                                    continuous_sensitive_cols=continuous_sensitive_cols)
+                                    continuous_sensitive_cols=continuous_sensitive_cols,
+                                    error_col=error_col,
+                                    error_type=args.error_type)
 
-    # Create chi-squared heatmap visualization
-    chi_viz_cols = [error_label] + actual_sensitive_cols
-    chi_res_viz = chi_res[chi_viz_cols].copy()
-    chi_res_viz.index = chi_res['cond_name'].str.strip()
+    if not args.no_plots:
+      # Create chi-squared heatmap visualization (Task 4 redoes styling)
+      chi_viz_cols = ['error_sep'] + sep_cols
+      chi_res_viz = chi_res[chi_viz_cols].copy()
+      chi_res_viz.index = chi_res['cond_name'].str.strip()
 
-    plt.figure(figsize=(max(4, len(chi_viz_cols) + 2), max(6, len(chi_res_viz) * 0.6)))
-    ax = sns.heatmap(chi_res_viz, annot=True, center=0.05, cbar=False,
-                     cmap=sns.color_palette("vlag", as_cmap=True), robust=True)
-    ax.set_title("Chi-squared Test Results (p-values)")
-    ax.xaxis.tick_top()
-    ax.tick_params(axis='x', which='major', length=0)
-    ax.tick_params(axis='y', which='major', length=0)
-    plt.yticks(rotation=0, ha='right')
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/chi_res_heatmap.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: chi_res_heatmap.png")
+      plt.figure(figsize=(max(4, len(chi_viz_cols) + 2), max(6, len(chi_res_viz) * 0.6)))
+      ax = sns.heatmap(chi_res_viz, annot=True, center=0.05, cbar=False,
+                       cmap=sns.color_palette("vlag", as_cmap=True), robust=True)
+      ax.set_title("Separability Test Results (p-values)")
+      ax.xaxis.tick_top()
+      ax.tick_params(axis='x', which='major', length=0)
+      ax.tick_params(axis='y', which='major', length=0)
+      plt.yticks(rotation=0, ha='right')
+      plt.tight_layout()
+      plt.savefig(f"{output_dir}/chi_res_heatmap.png", dpi=300, bbox_inches='tight')
+      plt.close()
+      print(f"Saved: chi_res_heatmap.png")
 
-    # Create quality metrics heatmap
-    skip_meta_quali = {'cond_descr', 'cond_name'}
-    quali_viz_cols = [c for c in all_quali.columns if c not in skip_meta_quali]
-    all_quali_viz = all_quali[quali_viz_cols].copy()
-    all_quali_viz.index = all_quali['cond_name'].str.strip()
-    plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png",
-                         error_label=error_label)
-    plt.close()
-    print(f"Saved: all_quali_heatmap.png")
+      # Create quality metrics heatmap
+      skip_meta_quali = {'cond_descr', 'cond_name'}
+      quali_viz_cols = [c for c in all_quali.columns if c not in skip_meta_quali]
+      all_quali_viz = all_quali[quali_viz_cols].copy()
+      all_quali_viz.index = all_quali['cond_name'].str.strip()
+      plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png",
+                           error_label=error_label)
+      plt.close()
+      print(f"Saved: all_quali_heatmap.png")
 
     # Generate per-condition recap heatmaps and composition plots
     if not args.no_plots:
@@ -517,60 +520,33 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
 
     # --- CSV outputs ---
 
-    # Global summary CSV: one row per condition
-    # 'condition' column (renamed from cond_descr) is always first
+    # Global summary CSV (Overview): one row per condition.
+    # Columns: condition, <metadata>, cond_name, n_clusters, silh,
+    #          error_sep, error_gap, <F>_sep, <F>_gap.
+    # silh/<gap>/<sep> are pulled from all_quali (which copies sep from chi_res).
     summary_rows = []
     chi_res_lookup = chi_res.set_index('cond_name') if chi_res is not None else None
     all_quali_lookup = all_quali.set_index('cond_name') if all_quali is not None else None
+    # Overview metric columns from all_quali, preserving its column order.
+    quali_metric_cols = [c for c in all_quali.columns if c not in ('cond_descr', 'cond_name')]
     for i, cond_name in enumerate(results['cond_name']):
         recap = results['cond_recap'][i]
-        kw_p = chi_res_lookup.loc[cond_name, error_label] if (
-            chi_res_lookup is not None and cond_name in chi_res_lookup.index
-        ) else np.nan
-
-        # Error rate / mean columns (may be renamed via error_label)
-        err_rate_col = f'{error_label}_rate' if f'{error_label}_rate' in recap.columns else 'error_rate' if 'error_rate' in recap.columns else None
-        err_mean_col = f'{error_label}_mean' if f'{error_label}_mean' in recap.columns else 'error_mean' if 'error_mean' in recap.columns else None
-        abs_err_col  = f'abs_{error_label}_mean' if f'abs_{error_label}_mean' in recap.columns else 'abs_error_mean' if 'abs_error_mean' in recap.columns else None
-
-        def _safe_stat(series, fn):
-            try:
-                v = fn(series.dropna())
-                return round(v, 4) if not np.isnan(v) else np.nan
-            except Exception:
-                return np.nan
 
         row = {'condition': results['cond_descr'][i]}
         if metadata:
             row.update(metadata)
         row['cond_name'] = cond_name
-
         row['n_clusters'] = len(recap)
-        row[f'kw_p_{error_label}'] = round(kw_p, 4) if not np.isnan(kw_p) else np.nan
-        row['silhouette_avg'] = _safe_stat(recap['silhouette'], np.mean) if 'silhouette' in recap.columns else np.nan
 
-        # Error stats (min, max, max_diff)
-        if err_rate_col and err_rate_col in recap.columns:
-            s = recap[err_rate_col]
-            row[f'{error_label}_avg'] = _safe_stat(s, np.mean)
-            row[f'{error_label}_min'] = _safe_stat(s, np.min)
-            row[f'{error_label}_max'] = _safe_stat(s, np.max)
-            row[f'{error_label}_max_diff'] = round(s.max() - s.min(), 4) if not s.isna().all() else np.nan
-        elif err_mean_col and err_mean_col in recap.columns:
-            s = recap[err_mean_col]
-            row[f'{error_label}_avg'] = _safe_stat(s, np.mean)
-            row[f'{error_label}_min'] = _safe_stat(s, np.min)
-            row[f'{error_label}_max'] = _safe_stat(s, np.max)
-            row[f'{error_label}_max_diff'] = round(s.max() - s.min(), 4) if not s.isna().all() else np.nan
-        if abs_err_col and abs_err_col in recap.columns:
-            row[f'abs_{error_label}_avg'] = _safe_stat(recap[abs_err_col], np.mean)
-
-        # diff_vs_rest stats
-        if 'diff_vs_rest' in recap.columns:
-            dvr = recap['diff_vs_rest']
-            row['diff_vs_rest_min'] = _safe_stat(dvr, np.min)
-            row['diff_vs_rest_max'] = _safe_stat(dvr, np.max)
-            row['diff_vs_rest_max_diff'] = round(dvr.max() - dvr.min(), 4) if not dvr.isna().all() else np.nan
+        # Pull silh / *_sep / *_gap from all_quali (order: silh, error_sep,
+        # error_gap, then per-feature sep/gap pairs).
+        if all_quali_lookup is not None and cond_name in all_quali_lookup.index:
+            q = all_quali_lookup.loc[cond_name]
+            for c in quali_metric_cols:
+                row[c] = q[c]
+        else:
+            for c in quali_metric_cols:
+                row[c] = np.nan
 
         summary_rows.append(row)
 
@@ -595,31 +571,31 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         cond_clean = re.sub(r'\s+', '', cond_name)
         recap_i = results['cond_recap'][i].copy()
 
-        # Add rule: most distinctive sensitive feature per cluster (highest abs _diff)
-        # Exclude diff_vs_rest and _max_prop_diff (aggregate stats, not per-group diffs)
-        diff_cols = [c for c in recap_i.columns
-                     if c.endswith('_diff') and c != 'diff_vs_rest' and not c.endswith('_max_prop_diff')]
-        if diff_cols:
+        # Add rule: most distinctive sensitive feature per cluster (largest |gap|).
+        # Derived from the per-feature <F>_gap columns (signed cluster-vs-rest gap);
+        # exclude the error column's own gap.
+        gap_cols = [c for c in recap_i.columns if c.endswith('_gap') and c != 'error_gap']
+        if gap_cols:
             def _make_rule(row):
-                vals = row[diff_cols].abs()
+                vals = row[gap_cols].abs()
                 if vals.isna().all():
                     return ''
                 best_col = vals.idxmax()
                 if pd.isna(best_col):
                     return ''
                 best_val = row[best_col]
-                feature = best_col.replace('_diff', '')
+                feature = best_col[:-len('_gap')]
                 direction = '+' if best_val > 0 else ''
                 return f"{feature} ({direction}{round(best_val, 3)})"
             recap_i.insert(1, 'rule', recap_i.apply(_make_rule, axis=1))
         else:
             recap_i.insert(1, 'rule', '')
 
-        # Add OVERALL row with Kruskal-Wallis stat test
-        kw_p = chi_res_lookup.loc[cond_name, error_label] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
+        # Add OVERALL row with the omnibus error separability p-value.
+        error_sep = chi_res_lookup.loc[cond_name, 'error_sep'] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
         overall_row = {col: '' for col in recap_i.columns}
         overall_row['c'] = 'OVERALL'
-        overall_row['rule'] = f"kruskallwallis_p ({error_label}): {round(kw_p, 4) if not np.isnan(kw_p) else 'n/a'}"
+        overall_row['rule'] = f"error_sep: {round(error_sep, 4) if not (error_sep is None or np.isnan(error_sep)) else 'n/a'}"
         recap_i = pd.concat([recap_i, pd.DataFrame([overall_row])], ignore_index=True)
 
         # Append separability test results (feature-level stat tests across clusters)
@@ -638,12 +614,12 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     print(f"Saved: {len(results['cond_name'])} per-condition CSVs")
 
     print(f"\nAll outputs saved to: {output_dir}/")
-    print(f"  - results_summary.csv (global: 1 row per condition, kw_p_{error_label} as key metric)")
-    print(f"  - {len(results['cond_name'])} per-condition CSVs (1 row per cluster + OVERALL stat test)")
-    print("  - chi_res.csv / chi_res_heatmap.png")
-    print("  - all_quali_heatmap.png")
+    print(f"  - results_summary.csv (Overview: 1 row per condition, silh/error_sep/error_gap + per-feature sep/gap)")
+    print(f"  - {len(results['cond_name'])} per-condition CSVs (1 row per cluster + OVERALL error_sep + SEP rows)")
+    print("  - chi_res.csv")
     print("  - exp_condition.csv")
     if not args.no_plots:
+        print("  - chi_res_heatmap.png / all_quali_heatmap.png")
         print(f"  - {len(results['cond_name'])} recap heatmaps + cluster scatter plots")
         print(f"  - composition plots")
 

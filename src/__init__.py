@@ -28,7 +28,6 @@ from .visualization import (
     plot_quality_metrics_heatmap,
 )
 from .fairness_metrics import (
-    FairnessMetrics,
     cluster_proportion,
     one_vs_all_p_binary,
     one_vs_all_p_continuous,
@@ -64,7 +63,6 @@ __all__ = [
     "plot_silhouette_heatmap",
     "plot_quality_metrics_heatmap",
     # fairness_metrics
-    "FairnessMetrics",
     "cluster_proportion",
     "one_vs_all_p_binary",
     "one_vs_all_p_continuous",
