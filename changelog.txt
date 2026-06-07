@@ -1,0 +1,86 @@
+CHANGELOG & TBD
+===============
+
+Done tasks & bugs 
+----
+
+- fairness_metrics.py: compute_representation_ratio was returning 0.0 when overall_rate == 0,
+  now returns NaN (can't compute a ratio when the group doesn't exist in the population)
+
+- clustering.py: Bug in kprototypes silhouette implementation where we were using the wrong distance matrix (raw Euclidean + gamma * Hamming instead of Gower). Fixed by implementing a custom silhouette function that uses the correct precomputed distance matrix. 
+  https://codinginfinite.com/silhouette-coefficient-for-k-modes-and-k-prototypes-clustering/
+
+- experiments.py: continuous sensitive columns like age were being passed through _expand_multiclass_cols, which treated each unique value as a separate category. Then we were applying Kruskal-Wallis to these "categories", which is not appropriate for continuous data. Fixed with a numeric_set branch that routes to Kruskal-Wallis instead (experiments.py:544).
+
+- experiments.py: chi2 rounding issue 
+
+- preprocessing.py / clustering.py: Gower distance + one hot encoding was wrong
+  because we were applying one hot encoding before computing Gower, which is redundant and
+  causes bias towards categorical features (since one hot ecoded columns get more weight in the distance).
+  Fixed by skipping one hot encoding for Gower and computing the distance directly on the
+  original mixed data. Ref: https://stats.stackexchange.com/questions/612809/bias-towards-categorical-data-when-one-hot-encoding-and-standardizing-for-machine-learning
+
+- README: added fairness metrics section 
+  https://fairlearn.org/main/user_guide/assessment/common_fairness_metrics.html
+  https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.entropy.html
+
+- README: added explanation for one hot encoding and StandardScaler in the context of Gower distance, and why we skip them for Gower since it's designed to handle mixed data without OHE or standardization.
+  ref: https://stats.stackexchange.com/questions/612809/bias-towards-categorical-data-when-one-hot-encoding-and-standardizing-for-machine-learning
+
+- README: added kprototypes silhouette section explaining why standard silhouette doesn't work
+  and what we do instead (precomputed Huang distance matrix)
+  ref: https://codinginfinite.com/silhouette-coefficient-for-k-modes-and-k-prototypes-clustering/
+
+TBD
+---
+
+bugs / correctness:
+
+DONE: - experiments.py:221,242 — p-values for error and sensitive cols use poisson_means_test,
+  which assumes Poisson data. Binary error counts follow Binomial. Should use fisher_exact instead.
+  ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.fisher_exact.html - the tests should be equivalent. If we have a row wiht 0 you just expect that the next row should not be 0.0 and this trick works. 
+
+DONE: - proxy features are not working to make the experimental codnitions. - high prio  
+
+DONE: - if you set weights, it should appear in hte naming of the folder - high prio
+
+DONE: - gaps in heatmpas of the results 
+
+- experiments.py:305 — max_repr_ratio takes max() across representation ratios, so it only
+  catches over-representation. A group with ratio 0.05 (nearly absent) gets ignored.
+  Should capture both directions: max(over-rep, 1/under-rep).
+  ref (disparate impact): https://fairlearn.org/main/user_guide/assessment/common_fairness_metrics.html
+
+- experiments.py:579–586 — BH multiple comparison correction runs on sensitive col p-values
+  but excludes the error p-value. Error should be included in the correction family.
+  ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.false_discovery_control.html
+
+
+
+
+Done/In progress- run experiments on DAS-6 - high prio
+
+- Cleanup code
+
+- main.py:309 — no warning when user runs experiment mode with +ERR conditions. Should warn that including the error column as a feature is usually not what you want.
+
+- gh project trello to keep track of tasks, bugs etc 
+
+Done: - add fairness metrics from google doc. 
+  - apply the doc's binary gap to each
+  category, and report the largest one — i.e. the category whose representation swings
+  most across clusters.
+
+
+- fix heatmpas by scaling them column by column wrt color.
+
+- the darker the more it diverges from the avg or from a fair situation 
+
+- for silhouette score the darker the better, for p-values the darker the worse, for representation ratio the darker the more over or under represented. 
+
+- we could have things like age median or size proportion, or gender proportion, so if its raw values we could keep them grey/green and if we needed ot interpret we will have a more vivid colour. 
+
+- publish package to pypi and add installation instructions to README. It is the same principle, but we should have a proper package structure and setup.py for this.
+
+- gower distance is very slow - low prio
+
