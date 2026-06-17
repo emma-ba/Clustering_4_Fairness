@@ -78,13 +78,35 @@ def parse_feature_weights(weight_str, regular_cols, sensitive_cols, special_cols
 def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm, distance='euclidean'):
     """Thin wrapper around encode_categoricals.
 
-    Multi-class one-hot dummies for sensitive and proxy columns are kept in the
-    DataFrame but excluded from their respective col_lists so they don't inflate
-    the clustering feature matrix. Binary columns are unchanged.
+    Multi-class sensitive and proxy columns are clustered like every other
+    feature: under Euclidean/Manhattan their one-hot dummies stay in their
+    col_lists group (the feature matrix); under Gower the factorized original
+    stays there instead. Their readable dummies are also tracked (via
+    multiclass_dummies) for downstream fairness analysis. Binary columns are
+    unchanged.
     """
     return encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
-                               multiclass_remove_from={'sensitive', 'proxy'},
                                distance=distance)
+
+
+def _build_sensitive_analysis_list(sensitive_cols, multiclass_dummies, original_sensitive_cols):
+    """Sensitive columns for fairness analysis (proportions / chi2 / entropy /
+    balance score): binary/numeric sensitives plus the readable multi-class
+    dummies, with the factorized multi-class originals dropped.
+
+    Deduplicated so it is correct under either distance: with Euclidean/Manhattan
+    the dummies already live in `sensitive_cols` (they are clustered), while with
+    Gower `sensitive_cols` holds the factorized original instead and the dummies
+    are added back here. The float-coded originals are never analysed as
+    continuous.
+    """
+    analysis = [c for c in sensitive_cols if c not in multiclass_dummies]
+    for orig_col, dummies in multiclass_dummies.items():
+        if orig_col in original_sensitive_cols:
+            for dc in dummies:
+                if dc not in analysis:
+                    analysis.append(dc)
+    return analysis
 
 
 def parse_args():
@@ -290,9 +312,10 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     error_label = getattr(args, 'error_label', None) or error_col or 'error'
 
     # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes).
-    # Multi-class dummies from sensitive cols are excluded from col_lists['sensitive']
-    # (so they don't go into the feature matrix), but kept in the DataFrame and tracked
-    # via `multiclass_dummies` for fairness analysis.
+    # Multi-class sensitive and proxy dummies stay in their col_lists group so they are
+    # clustered like every other feature (Euclidean/Manhattan: one-hot dummies; Gower:
+    # factorized original). They are also tracked via `multiclass_dummies` so fairness
+    # analysis can use the readable per-category dummies.
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
     col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols, 'proxy': proxy_cols, 'special': special_cols}
     df, col_lists, categorical_col_names, multiclass_dummies, ohe_col_names = _encode_multiclass_categoricals(
@@ -303,16 +326,14 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     proxy_cols = col_lists['proxy']
     special_cols = col_lists['special']
 
-    # For fairness analysis, the multi-class dummies of *sensitive* originals are still
-    # needed (proportions, chi2, entropy, balance score). Build the full analysis list
-    # by adding them back on top of the (binary-only) sensitive_cols. The multi-class
-    # originals themselves are dropped from the analysis list: under --distance gower
-    # they remain in sensitive_cols as factorized codes (for the distance), and analysing
-    # those codes would misread them as continuous — we analyse their dummies instead.
-    sensitive_cols_analysis = [c for c in sensitive_cols if c not in multiclass_dummies]
-    for orig_col, dummies in multiclass_dummies.items():
-        if orig_col in original_sensitive_cols:
-            sensitive_cols_analysis.extend(dummies)
+    # Sensitive list for fairness analysis: the readable multi-class dummies plus
+    # the binary/numeric sensitives, with the factorized multi-class originals
+    # dropped (under Gower they live in sensitive_cols as float codes and must not
+    # be analysed as continuous). Deduplicated because under Euclidean/Manhattan
+    # the dummies already sit in sensitive_cols (they are clustered).
+    sensitive_cols_analysis = _build_sensitive_analysis_list(
+        sensitive_cols, multiclass_dummies, original_sensitive_cols
+    )
 
     # Build groups dict for condition generation
     groups = {}
@@ -824,8 +845,9 @@ def main():
         )
 
     # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes).
-    # Multi-class sensitive dummies stay in the DataFrame for fairness analysis but are
-    # excluded from col_lists['sensitive'] so they don't inflate the feature matrix.
+    # Multi-class sensitive and proxy dummies stay in their col_lists group so they are
+    # clustered like every other feature; they are also tracked via `multiclass_dummies`
+    # for fairness analysis.
     categorical_cols_arg = parse_column_list(getattr(args, 'categorical_cols', None))
     col_lists = {'regular': regular_cols, 'sensitive': sensitive_cols,
                  'proxy': proxy_cols, 'special': special_cols}
@@ -837,14 +859,13 @@ def main():
     proxy_cols = col_lists['proxy']
     special_cols = col_lists['special']
 
-    # Full sensitive list for fairness analysis (binary + multi-class dummies).
-    # Multi-class originals are dropped here: under --distance gower they stay in
-    # sensitive_cols as factorized codes for the distance and must not be analysed as
-    # continuous — their readable dummies are analysed instead.
-    sensitive_cols_analysis = [c for c in sensitive_cols if c not in multiclass_dummies]
-    for orig_col, dummies in multiclass_dummies.items():
-        if orig_col in original_sensitive_cols:
-            sensitive_cols_analysis.extend(dummies)
+    # Sensitive list for fairness analysis (binary/numeric sensitives + readable
+    # multi-class dummies, factorized originals dropped). Deduplicated so it is
+    # correct whether the dummies are clustered (Euclidean/Manhattan: already in
+    # sensitive_cols) or the factorized original is (Gower).
+    sensitive_cols_analysis = _build_sensitive_analysis_list(
+        sensitive_cols, multiclass_dummies, original_sensitive_cols
+    )
 
     # Build clustering features
     clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols

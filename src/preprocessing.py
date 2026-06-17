@@ -7,7 +7,7 @@ import pandas as pd
 
 
 def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
-                        multiclass_remove_from=None, distance='euclidean'):
+                        distance='euclidean'):
     """
     Encode categorical columns for clustering.
 
@@ -24,11 +24,6 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
     categorical_cols_arg : list of str
         Explicitly specified categorical columns (e.g. from --categorical_cols).
     algorithm : str
-    multiclass_remove_from : iterable of str, optional
-        Names of col_lists from which multi-class one-hot dummies should NOT be
-        inserted. The original column is still removed from those lists, and the
-        dummies are still added to the DataFrame — they're just kept out of the
-        feature matrix groups. Binary one-hot encodings are unaffected.
 
     Returns
     -------
@@ -39,15 +34,13 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
         For other algorithms: empty list (all columns are now numeric after encoding).
     multiclass_dummies : dict of {original_col: [dummy_col_names]}
         For each multi-class column that was encoded, maps the original column
-        name to its dummy column names. Useful for callers that excluded these
-        from col_lists but still need them for downstream analysis.
+        name to its dummy column names, for callers that analyse the readable
+        per-category dummies separately (e.g. fairness metrics).
     ohe_col_names : list of str
         Names of all one-hot encoded dummy columns (binary and multi-class).
         Empty for kprototypes and gower paths. Callers use this to exclude
         OHE dummies from StandardScaler.
     """
-    multiclass_remove_from = set(multiclass_remove_from or [])
-
     # Collect all columns used in clustering
     seen = set()
     all_cols_ordered = []
@@ -144,17 +137,13 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
         if is_multiclass:
             multiclass_dummies[col] = dummy_cols
 
-        # Update col_lists: remove the original column from each list.
-        # For multi-class cols in lists named in multiclass_remove_from, skip inserting
-        # the dummies — they stay in the DataFrame for downstream analysis but are
-        # excluded from the feature matrix groups.
-        for list_name, cols in col_lists_updated.items():
+        # Update col_lists: replace the original column with its dummies in
+        # every list that contained it.
+        for cols in col_lists_updated.values():
             if col not in cols:
                 continue
             idx = cols.index(col)
             cols.remove(col)
-            if is_multiclass and list_name in multiclass_remove_from:
-                continue
             for j, dc in enumerate(dummy_cols):
                 cols.insert(idx + j, dc)
 
