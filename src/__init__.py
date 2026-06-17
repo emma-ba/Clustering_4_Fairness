@@ -32,6 +32,11 @@ from .fairness_metrics import (
     one_vs_all_p_binary,
     one_vs_all_p_continuous,
     mean_diff,
+    size_metrics,
+    extreme_pair_gap_p,
+    omnibus_separability_p,
+    omnibus_error_sep_p,
+    fisher_rxc_p,
 )
 from .experiments import (
     make_recap,
@@ -67,6 +72,11 @@ __all__ = [
     "one_vs_all_p_binary",
     "one_vs_all_p_continuous",
     "mean_diff",
+    "size_metrics",
+    "extreme_pair_gap_p",
+    "omnibus_separability_p",
+    "omnibus_error_sep_p",
+    "fisher_rxc_p",
     # experiments
     "make_recap",
     "make_chi_tests",

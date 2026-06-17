@@ -9,6 +9,7 @@ from src.clustering import cluster, gower_distance
 from src.scoring import (
     make_chi2_error_scorer,
     make_kruskal_error_scorer,
+    make_categorical_error_scorer,
     make_chi2_sensitive_scorer, make_composite_scorer,
 )
 from src.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
@@ -19,6 +20,7 @@ from src.experiments import (
     separability_check
 )
 from src.preprocessing import encode_categoricals
+from src.fairness_metrics import multiclass_error_types
 from datetime import datetime
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -206,8 +208,15 @@ def parse_args():
     parser.add_argument("--error_label", type=str, default=None,
                         help="Display name for the error column in output tables and heatmaps. Defaults to the value of --error_col.")
     parser.add_argument("--error_type", type=str, default="binary",
-                        choices=["binary", "regression"],
-                        help="Type of error column: 'binary' (classification 0/1) or 'regression' (continuous). Default: binary")
+                        choices=["binary", "regression", "multiclass"],
+                        help="Type of error column: 'binary' (classification 0/1), 'regression' (continuous), or 'multiclass' (3+ class predictions; the error column is derived from --y_true_col / --y_pred_col). Default: binary")
+    parser.add_argument("--error_multiclass_option", type=str, default="per_class",
+                        choices=["accuracy", "per_class", "per_cell", "onehot"],
+                        help="How to derive the multi-class error column (only with --error_type multiclass): "
+                             "'accuracy' (binary correct/incorrect), "
+                             "'per_class' (default; true-class label of each error, 'correct' otherwise), "
+                             "'per_cell' (confusion cell 'true→pred' of each error, 'correct' otherwise), "
+                             "'onehot' (one binary error column per class).")
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
     # Output
@@ -341,6 +350,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
             raise ValueError("--error_col required for chi2_error scoring")
         if args.error_type == 'regression':
             scoring_fn = make_kruskal_error_scorer(df[error_col].values)
+        elif args.error_type == 'multiclass':
+            scoring_fn = make_categorical_error_scorer(df[error_col].values)
         else:
             scoring_fn = make_chi2_error_scorer(df[error_col].values)
     elif args.scoring == "chi2_sensitive":
@@ -396,6 +407,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         original_sensitive_cols=original_sensitive_cols,
         continuous_sensitive_cols=continuous_sensitive_cols,
         ohe_col_names=ohe_col_names,
+        multiclass_option=args.error_multiclass_option,
     )
 
     # Print progress for each condition
@@ -411,7 +423,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols_analysis,
                              error_type=args.error_type, error_col=error_col,
                              error_label=error_label,
-                             continuous_sensitive_cols=continuous_sensitive_cols)
+                             continuous_sensitive_cols=continuous_sensitive_cols,
+                             multiclass_option=args.error_multiclass_option)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
@@ -432,25 +445,18 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                                     error_label=error_label,
                                     continuous_sensitive_cols=continuous_sensitive_cols,
                                     error_col=error_col,
-                                    error_type=args.error_type)
+                                    error_type=args.error_type,
+                                    multiclass_option=args.error_multiclass_option)
 
     if not args.no_plots:
-      # Create chi-squared heatmap visualization (Task 4 redoes styling)
+      # Separability test heatmap (omnibus p-values) — same blue/red/violet styling
+      # and slanted labels as the Overview heatmap (error=red, sensitive=violet).
       chi_viz_cols = ['error_sep'] + sep_cols
       chi_res_viz = chi_res[chi_viz_cols].copy()
       chi_res_viz.index = chi_res['cond_name'].str.strip()
-
-      plt.figure(figsize=(max(4, len(chi_viz_cols) + 2), max(6, len(chi_res_viz) * 0.6)))
-      ax = sns.heatmap(chi_res_viz, annot=True, center=0.05, cbar=False,
-                       cmap=sns.color_palette("vlag", as_cmap=True), robust=True)
-      ax.set_title("Separability Test Results (p-values)")
-      ax.xaxis.tick_top()
-      ax.tick_params(axis='x', which='major', length=0)
-      ax.tick_params(axis='y', which='major', length=0)
-      plt.yticks(rotation=0, ha='right')
-      plt.tight_layout()
-      plt.savefig(f"{output_dir}/chi_res_heatmap.png", dpi=300, bbox_inches='tight')
-      plt.close()
+      plot_quality_heatmap(chi_res_viz, f"{output_dir}/chi_res_heatmap.png",
+                           error_label=error_label,
+                           title="Separability Test Results (p-values)")
       print(f"Saved: chi_res_heatmap.png")
 
       # Create quality metrics heatmap
@@ -469,7 +475,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         for i, cond_name in enumerate(results['cond_name']):
             recap = results['cond_recap'][i].copy()
             if len(recap) > 1:  # Only plot if there are multiple clusters
-                plot_cluster_recap_heatmap(recap, cond_name, output_dir, multiclass_dummies=multiclass_dummies)
+                plot_cluster_recap_heatmap(recap, cond_name, output_dir, multiclass_dummies=multiclass_dummies, error_label=error_label)
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
 
@@ -662,6 +668,22 @@ def main():
         else:
             raise ValueError("--error_type regression requires either --error_col or both --y_true_col and --y_pred_col")
 
+    # Multi-class error: derive a categorical/indicator error column from y_true/y_pred.
+    if args.error_type == 'multiclass':
+        if not (args.y_true_col and args.y_pred_col):
+            raise ValueError("--error_type multiclass requires both --y_true_col and --y_pred_col")
+        if args.error_multiclass_option == 'onehot':
+            raise NotImplementedError(
+                "--error_multiclass_option onehot (one error-column set per class) is not "
+                "wired through the result tables yet; use accuracy, per_class, or per_cell."
+            )
+        err_df = multiclass_error_types(df[args.y_true_col], df[args.y_pred_col],
+                                        args.error_multiclass_option)
+        df['_multiclass_error'] = err_df['error'].values
+        args.error_col = '_multiclass_error'
+        print(f"  Derived multi-class error ('{args.error_multiclass_option}') "
+              f"from {args.y_true_col} vs {args.y_pred_col}")
+
     # Experiment mode: run all conditions
     if args.experiment is not None:
         full_timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -843,6 +865,8 @@ def main():
             raise ValueError("--error_col required for chi2_error scoring")
         if args.error_type == 'regression':
             scoring_fn = make_kruskal_error_scorer(df[args.error_col].values, mask=scorer_mask)
+        elif args.error_type == 'multiclass':
+            scoring_fn = make_categorical_error_scorer(df[args.error_col].values, mask=scorer_mask)
         else:
             scoring_fn = make_chi2_error_scorer(df[args.error_col].values, mask=scorer_mask)
     elif args.scoring == "chi2_sensitive":
@@ -923,7 +947,8 @@ def main():
                            feature_matrix=result.feature_matrix,
                            distance_matrix=result.distance_matrix,
                            original_sensitive_cols=original_sensitive_cols,
-                           continuous_sensitive_cols=continuous_sensitive_cols)
+                           continuous_sensitive_cols=continuous_sensitive_cols,
+                           multiclass_option=args.error_multiclass_option)
 
         # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")
@@ -934,7 +959,8 @@ def main():
 
         # Save recap heatmap
         if not args.no_plots and len(recap) > 1:
-            plot_cluster_recap_heatmap(recap.copy(), run_name, output_dir, multiclass_dummies=multiclass_dummies)
+            error_label = getattr(args, 'error_label', None) or args.error_col or 'error'
+            plot_cluster_recap_heatmap(recap.copy(), run_name, output_dir, multiclass_dummies=multiclass_dummies, error_label=error_label)
             print(f"Saved: {run_name}.png")
 
     # Separability check (chi-squared for categorical, Kruskal-Wallis for numeric)

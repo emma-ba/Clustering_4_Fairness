@@ -118,6 +118,54 @@ def make_kruskal_error_scorer(
     return scorer
 
 
+def make_categorical_error_scorer(
+    error_data: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+) -> ScoringFn:
+    """
+    Factory: returns a scorer for a multi-class (categorical) error column.
+
+    Builds an (error-category x cluster) contingency table and returns
+    1 - chi2_p (higher = better error separation), mirroring the binary
+    `make_chi2_error_scorer` but generalised to 3+ error categories. Works on
+    string labels (e.g. 'correct' / 'A→B') as well as 0/1 indicators.
+
+    Parameters
+    ----------
+    error_data : np.ndarray
+        Categorical error column for all rows.
+    mask : np.ndarray, optional
+        Boolean mask applied during clustering (subset filtering).
+    """
+    data = np.asarray(error_data)
+    data = data[mask] if mask is not None else data
+
+    def scorer(X: np.ndarray, labels: np.ndarray) -> float:
+        n_clusters = len(set(labels) - {-1})
+        if n_clusters < 2:
+            return 0.0
+        non_noise = labels != -1
+        err = data[non_noise] if len(data) == len(labels) else data[:len(labels)][non_noise]
+        lab = labels[non_noise]
+        categories = sorted(set(err))
+        unique_labels = sorted(set(lab))
+        if len(categories) < 2:
+            return 0.0  # no error variation to separate
+        table = np.zeros((len(categories), len(unique_labels)), dtype=int)
+        for i, v in enumerate(categories):
+            for j, cl in enumerate(unique_labels):
+                table[i, j] = int(((err == v) & (lab == cl)).sum())
+        if table.sum() == 0 or (table == 0).all(axis=1).any():
+            return 0.0
+        try:
+            _, p, _, _ = chi2_contingency(table)
+            return 1.0 - p  # higher = better error separation
+        except ValueError:
+            return 0.0
+
+    return scorer
+
+
 def make_chi2_sensitive_scorer(
     sensitive_data: np.ndarray,
     mask: Optional[np.ndarray] = None,
@@ -194,7 +242,8 @@ def make_composite_scorer(
     fairness_weight : float
         Relative weight for fairness component (0 to Inf, default 0.2).
     error_type : str
-        'binary' for chi2-based error scorer, 'regression' for Kruskal-Wallis.
+        'binary' for chi2-based error scorer, 'regression' for Kruskal-Wallis,
+        'multiclass' for the categorical (r x c chi2) error scorer.
     """
     # Zero out weights for missing components
     if error_data is None:
@@ -215,6 +264,8 @@ def make_composite_scorer(
     if error_data is not None:
         if error_type == 'regression':
             error_scorer = make_kruskal_error_scorer(error_data, mask)
+        elif error_type == 'multiclass':
+            error_scorer = make_categorical_error_scorer(error_data, mask)
         else:
             error_scorer = make_chi2_error_scorer(error_data, mask)
 

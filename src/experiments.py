@@ -22,9 +22,12 @@ from scipy.stats import chi2_contingency, kruskal, mannwhitneyu, false_discovery
 from itertools import combinations
 from .clustering import cluster
 from .fairness_metrics import (
-    cluster_proportion, one_vs_all_p_binary, one_vs_all_p_continuous, mean_diff,
-    feature_kind, cluster_value, overview_gap, onevsall_gap,
-    omnibus_separability_p, onevsall_categorical_p,
+    mean_diff,
+    feature_kind, cluster_value, cluster_value_cat, overview_gap, overview_gap_cat,
+    onevsall_gap, onevsall_gap_cat, onevsall_gap_p,
+    omnibus_separability_p,
+    size_metrics, extreme_pair_gap_p, omnibus_error_sep_p,
+    error_kind_for,
 )
 
 
@@ -39,17 +42,21 @@ SILHOUETTE_WORKING_MEMORY_MIB = 128
 # Utils for Results - Recap
 # =============================================================================
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, multiclass_option=None):
   """
   Create a per-cluster Detail recap of cluster info, error stats, and per-feature
   one-vs-all fairness metrics.
 
   Emits one row per non-noise cluster with columns:
-    c, count, proportion, silh, <error value col(s)>, error_sep, error_gap,
-    and for each sensitive feature F: F_value, F_sep, F_gap.
+    c, count, proportion, silh, <error value col(s)>, error_gap, error_gap_sig,
+    and for each sensitive feature F: F_value, [F_cat], F_gap, [F_gap_cat], F_gap_sig.
+    (F_cat / F_gap_cat are emitted only for multi-categorical features; a multi-class
+    error column likewise adds error_value / error_cat / error_gap_cat.)
 
   Each sensitive feature is classified ONCE (binary / multicat / numeric) via
-  feature_kind() and represented by a SINGLE column trio — no one-hot expansion.
+  feature_kind() and represented by a SINGLE column group — no one-hot expansion.
+  The one-vs-all gap significance (F_gap_sig / error_gap_sig) uses Fisher 2x2
+  (binary / multicat winning category) or Mann-Whitney (numeric)."""
 
   Parameters
   ----------
@@ -69,6 +76,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   if sensitive_cols is None:
     sensitive_cols = []
   continuous_set = set(continuous_sensitive_cols or [])
+  error_kind = error_kind_for(error_type, multiclass_option)
 
   # Exclude noise points (cluster label -1 from DBSCAN/HDBSCAN) before any computation
   noise_mask = data_result['clusters'] != -1
@@ -93,25 +101,32 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # ...with proportion of total (non-noise) population
   recap['proportion'] = recap['count'] / recap['count'].sum()
 
-  if error_type == 'regression':
+  if error_kind == 'numeric':
     # Regression path: signed mean (bias direction) + absolute mean (magnitude)
     recap['error_mean'] = res.groupby(['clusters'])[error_col].mean().values
     recap['abs_error_mean'] = res.groupby(['clusters'])[error_col].apply(lambda x: x.abs().mean()).values
-  else:
+  elif error_kind == 'binary':
     # Binary path: per-cluster error count and error rate
     recap['n_error'] = res.groupby(['clusters']).sum().astype(int)
     recap['error_value'] = res.groupby(['clusters']).mean()
+  # multicat error (per_class / per_cell): error_value (modal-category proportion)
+  # and error_cat (modal label) are accumulated per cluster in the loop below,
+  # mirroring the multi-categorical feature path.
 
-  # Per-feature global positive value (binary): use the GLOBAL max so that an
-  # all-zero cluster doesn't miscount which value is "positive".
-  global_pos = {F: data_result[F].max() for F in sensitive_cols if kinds[F] == 'binary'}
-
-  # Per-cluster accumulators
-  error_sep = []
+  # Per-cluster accumulators. Category columns (winning category label) are only
+  # emitted for multi-categorical features, so accumulate them for those only.
+  multicat_cols = [F for F in sensitive_cols if kinds[F] == 'multicat']
+  error_gap_sig = []
   error_gap = []
+  # multicat-error-only accumulators (mirror the multicat feature columns).
+  error_value_acc = []
+  error_cat_acc = []
+  error_gap_cat_acc = []
   feat_value = {F: [] for F in sensitive_cols}
-  feat_sep = {F: [] for F in sensitive_cols}
+  feat_gap_sig = {F: [] for F in sensitive_cols}
   feat_gap = {F: [] for F in sensitive_cols}
+  feat_cat = {F: [] for F in multicat_cols}
+  feat_gap_cat = {F: [] for F in multicat_cols}
   silhouette = []
 
   # Get individual silhouette scores
@@ -135,16 +150,27 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     # F_value is always computable (no one-vs-all needed)
     for F in sensitive_cols:
       feat_value[F].append(cluster_value(c_data[F], kinds[F]))
+      if kinds[F] == 'multicat':
+        feat_cat[F].append(cluster_value_cat(c_data[F], kinds[F]))
+
+    # Multicat error value (modal-category proportion) + label, also always computable.
+    if error_kind == 'multicat':
+      error_value_acc.append(cluster_value(c_data[error_col], 'multicat'))
+      error_cat_acc.append(cluster_value_cat(c_data[error_col], 'multicat'))
 
     # Get out-of-cluster data
     rest_data = data_result.loc[data_result['clusters'] != c]
-    # Single-cluster guard: no one-vs-all possible -> *_sep / *_gap are NaN.
+    # Single-cluster guard: no one-vs-all possible -> *_gap / *_gap_sig are NaN.
     if(len(rest_data) == 0):
-      error_sep.append(np.nan)
+      error_gap_sig.append(np.nan)
       error_gap.append(np.nan)
+      if error_kind == 'multicat':
+        error_gap_cat_acc.append(np.nan)
       for F in sensitive_cols:
-        feat_sep[F].append(np.nan)
+        feat_gap_sig[F].append(np.nan)
         feat_gap[F].append(np.nan)
+      for F in multicat_cols:
+        feat_gap_cat[F].append(np.nan)
       silhouette.append(np.nan)
       break
 
@@ -154,49 +180,57 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     rest_recap = recap.loc[recap['clusters'] != c]
     rest_count = rest_recap['count'].sum()
 
-    # Error — one-vs-all signed gap and separability p-value
-    if error_type == 'regression':
+    # Error — one-vs-all signed gap, then a family-appropriate gap-significance
+    # test (numeric: Mann-Whitney; binary/multicat: Fisher 2x2 on the positive /
+    # most-divergent category) via onevsall_gap_p.
+    if error_kind == 'numeric':
       c_errors = c_data[error_col].values
       rest_errors = rest_data[error_col].values
       error_gap.append(round(mean_diff(c_errors, rest_errors), 6))
-      error_sep.append(one_vs_all_p_continuous(c_errors, rest_errors))
+    elif error_kind == 'multicat':
+      c_err = c_data[error_col]
+      rest_err = rest_data[error_col]
+      error_gap.append(round(onevsall_gap(c_err, rest_err, 'multicat'), 4))
+      error_gap_cat_acc.append(onevsall_gap_cat(c_err, rest_err))
     else:
       rest_n_error = rest_recap['n_error'].sum()
       error_gap.append(recap['error_value'][c] - rest_n_error / rest_count)
-      error_sep.append(one_vs_all_p_binary(
-          recap['n_error'][c], recap['count'][c], rest_n_error, rest_count
-      ))
+    error_gap_sig.append(onevsall_gap_p(c_data[error_col], rest_data[error_col], error_kind))
 
-    # Per-feature one-vs-all separability (sep) and signed gap.
+    # Per-feature one-vs-all signed gap and gap-significance.
     for F in sensitive_cols:
       kind = kinds[F]
       c_vals = c_data[F]
       rest_vals = rest_data[F]
       feat_gap[F].append(round(onevsall_gap(c_vals, rest_vals, kind), 4))
-      if kind == 'binary':
-        pos = global_pos[F]
-        c_pos = int((c_vals == pos).sum())
-        rest_pos = int((rest_vals == pos).sum())
-        feat_sep[F].append(one_vs_all_p_binary(c_pos, len(c_vals), rest_pos, len(rest_vals)))
-      elif kind == 'multicat':
-        feat_sep[F].append(onevsall_categorical_p(c_vals, rest_vals))
-      else:  # numeric
-        feat_sep[F].append(one_vs_all_p_continuous(c_vals.dropna().values, rest_vals.dropna().values))
+      if kind == 'multicat':
+        feat_gap_cat[F].append(onevsall_gap_cat(c_vals, rest_vals))
+      feat_gap_sig[F].append(onevsall_gap_p(c_vals, rest_vals, kind))
 
-  # Collect all new columns into a dict then concat once to avoid fragmentation
-  new_cols = {
-      'error_sep': error_sep,
-      'error_gap': np.around(error_gap, 3),
-  }
+  # Collect all new columns into a dict then concat once to avoid fragmentation.
+  # Multicat error emits value/cat (modal) alongside the gap/gap-cat, mirroring a
+  # multi-categorical feature.
+  new_cols = {}
+  if error_kind == 'multicat':
+    new_cols['error_value'] = error_value_acc
+    new_cols['error_cat'] = error_cat_acc
+  new_cols['error_gap'] = np.around(error_gap, 3)
+  if error_kind == 'multicat':
+    new_cols['error_gap_cat'] = error_gap_cat_acc
+  new_cols['error_gap_sig'] = error_gap_sig
   for F in sensitive_cols:
     new_cols[f'{F}_value'] = feat_value[F]
-    new_cols[f'{F}_sep'] = feat_sep[F]
+    if F in feat_cat:
+      new_cols[f'{F}_cat'] = feat_cat[F]
     new_cols[f'{F}_gap'] = feat_gap[F]
+    if F in feat_gap_cat:
+      new_cols[f'{F}_gap_cat'] = feat_gap_cat[F]
+    new_cols[f'{F}_gap_sig'] = feat_gap_sig[F]
   new_cols['silh'] = silhouette
 
   recap = pd.concat([recap, pd.DataFrame(new_cols, index=recap.index)], axis=1)
 
-  if error_type == 'regression':
+  if error_kind == 'numeric':
     recap['error_mean'] = np.around(recap['error_mean'], 3)
     recap['abs_error_mean'] = np.around(recap['abs_error_mean'], 3)
   else:
@@ -285,15 +319,16 @@ def separability_check(data, labels, columns):
 # Utils for Results - Chi-Square Tests
 # =============================================================================
 
-def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', error_label=None, continuous_sensitive_cols=None):
+def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', error_label=None, continuous_sensitive_cols=None, multiclass_option=None):
   """
   Compute one omnibus separability p-value per condition for the error column
   and for each sensitive feature.
 
   Each sensitive feature is classified ONCE (binary / multicat / numeric) via
-  feature_kind() and gets a single `<F>_sep` column. The error column gets an
-  `error_sep` column (Kruskal-Wallis for regression, otherwise treated as
-  binary/categorical via chi2). Benjamini-Hochberg FDR correction is applied
+  feature_kind() and gets a single `<F>_sep` column (chi2 for categorical, one-way
+  ANOVA for numeric). The error column gets an `error_sep` column: one-way ANOVA
+  for regression, otherwise an r x c Fisher exact test (R via rpy2) on the
+  (error-value x cluster) table. Benjamini-Hochberg FDR correction is applied
   ACROSS the `<F>_sep` columns within each row.
 
   Parameters
@@ -320,7 +355,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
     sensitive_cols = []
   continuous_set = set(continuous_sensitive_cols or [])
 
-  error_kind = 'numeric' if error_type == 'regression' else 'binary'
+  error_kind = error_kind_for(error_type, multiclass_option)
   sep_cols = [f'{F}_sep' for F in sensitive_cols]
 
   chi_res = {'cond_descr': [], 'cond_name': [], 'error_sep': []}
@@ -342,7 +377,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       continue
 
     chi_res['error_sep'].append(
-        omnibus_separability_p(res_df[error_col], labels, error_kind)
+        omnibus_error_sep_p(res_df[error_col], labels, error_kind)
     )
     for F in sensitive_cols:
       kind = feature_kind(res_df[F], F in continuous_set)
@@ -367,25 +402,35 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 # Utils for Results - All Quality Metrics
 # =============================================================================
 
-def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary'):
+def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None):
   """
-  Build the Overview frame: per-condition silhouette, separability p-values
-  (copied from chi_res) and across-cluster gaps (spread of the error column and
-  each sensitive feature).
+  Build the Overview frame: per-condition silhouette, cluster-size summary, error
+  separability / gap / gap-significance, and per-feature gap / gap-significance.
 
   Output columns (in order):
-    cond_descr, cond_name, silh, error_sep, error_gap, <F>_sep, <F>_gap
+    cond_descr, cond_name, silh,
+    min_size, min_prop, max_prop,
+    error_sep, error_gap, error_gap_sig,
+    <F>_gap, <F>_gap_cat*, <F>_gap_sig  (per sensitive feature;
+    *_gap_cat only for multi-categorical features)
+
+  `error_sep` is the omnibus separability across all clusters (copied from
+  chi_res). `error_gap` is the cross-cluster spread; `error_gap_sig` is the
+  significance of that spread tested on ONLY the two extreme clusters that define
+  it (extreme-pair test). Each sensitive feature follows the same gap /
+  extreme-pair-gap-sig pattern. Per the spec, the Overview omits a per-feature
+  omnibus `<F>_sep` column (that lives only in the separability-test output).
 
   Parameters
   ----------
   chi_res : pd.DataFrame
-      Output of make_chi_tests (provides error_sep and <F>_sep).
+      Output of make_chi_tests (provides error_sep).
   results : dict
       Results from run_experiments_generic().
   exp_condition : pd.DataFrame
       Experimental conditions (unused, kept for signature compatibility).
   sensitive_cols : list, optional
-      Sensitive column names. One <F>_sep/<F>_gap pair per feature.
+      Sensitive column names. One <F>_gap/<F>_gap_sig pair per feature.
   continuous_sensitive_cols : list, optional
       Subset of sensitive_cols to treat as numeric regardless of cardinality.
   error_col : str
@@ -396,210 +441,301 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
   if sensitive_cols is None:
     sensitive_cols = []
   continuous_set = set(continuous_sensitive_cols or [])
-  error_kind = 'numeric' if error_type == 'regression' else 'binary'
+  error_kind = error_kind_for(error_type, multiclass_option)
+
+  # Feature kinds are constant across conditions (they depend only on the column
+  # data, not the cluster labels), so classify once from the first condition.
+  # The winning-category column is emitted only for multi-categorical features.
+  kinds = {}
+  if len(chi_res['cond_name']) > 0:
+    ref_df = results['cond_res'][0]
+    kinds = {F: feature_kind(ref_df[F], F in continuous_set) for F in sensitive_cols}
+  multicat_cols = [F for F in sensitive_cols if kinds.get(F) == 'multicat']
 
   silh = []
-  error_gap = []
+  min_size, min_prop, max_prop = [], [], []
+  error_gap, error_gap_sig = [], []
+  error_gap_class = []  # multicat error only: winning error class behind the gap
   feat_gap = {F: [] for F in sensitive_cols}
+  feat_gap_cat = {F: [] for F in multicat_cols}
+  feat_gap_sig = {F: [] for F in sensitive_cols}
 
   for i in range(0, len(chi_res['cond_name'])):
     recap = results['cond_recap'][i]
     res_df = results['cond_res'][i]
     labels = res_df['clusters'].values
-    single_cluster = len(recap) == 1
 
-    if single_cluster:
+    # Size summary is well-defined even for a single cluster.
+    sizes = size_metrics(labels)
+    min_size.append(sizes['min_size'])
+    min_prop.append(sizes['min_prop'])
+    max_prop.append(sizes['max_prop'])
+
+    # Gaps / extreme-pair significance need >= 2 clusters.
+    if len(recap) == 1:
       silh.append(np.nan)
       error_gap.append(np.nan)
+      error_gap_sig.append(np.nan)
+      if error_kind == 'multicat':
+        error_gap_class.append(np.nan)
       for F in sensitive_cols:
         feat_gap[F].append(np.nan)
+        feat_gap_sig[F].append(np.nan)
+      for F in multicat_cols:
+        feat_gap_cat[F].append(np.nan)
       continue
 
     silh.append(recap['silh'].mean())
     error_gap.append(overview_gap(res_df[error_col], labels, error_kind))
+    error_gap_sig.append(extreme_pair_gap_p(res_df[error_col], labels, error_kind))
+    if error_kind == 'multicat':
+      error_gap_class.append(overview_gap_cat(res_df[error_col], labels))
     for F in sensitive_cols:
-      kind = feature_kind(res_df[F], F in continuous_set)
+      kind = kinds[F]
       feat_gap[F].append(overview_gap(res_df[F], labels, kind))
+      feat_gap_sig[F].append(extreme_pair_gap_p(res_df[F], labels, kind))
+      if kind == 'multicat':
+        feat_gap_cat[F].append(overview_gap_cat(res_df[F], labels))
 
   all_quali = {
       'cond_descr': chi_res['cond_descr'].values,
       'cond_name': chi_res['cond_name'].values,
       'silh': silh,
+      'min_size': min_size,
+      'min_prop': min_prop,
+      'max_prop': max_prop,
       'error_sep': chi_res['error_sep'].values,
       'error_gap': error_gap,
   }
+  if error_kind == 'multicat':
+    all_quali['error_gap_class'] = error_gap_class
+  all_quali['error_gap_sig'] = error_gap_sig
   for F in sensitive_cols:
-    all_quali[f'{F}_sep'] = chi_res[f'{F}_sep'].values
     all_quali[f'{F}_gap'] = feat_gap[F]
+    if F in feat_gap_cat:
+      all_quali[f'{F}_gap_cat'] = feat_gap_cat[F]
+    all_quali[f'{F}_gap_sig'] = feat_gap_sig[F]
 
   return pd.DataFrame(all_quali)
 
 
 # =============================================================================
-# Visualization
+# Visualization — shared column classification, labels, and color families
 # =============================================================================
+#
+# Result tables (Overview + Detailed) are organised into three metric families,
+# each with its own color family (spec: Size = blue, Error = red, Sensitive =
+# violet). p-value / significance columns use the *reversed* colormap so that a
+# lower p (more significant) renders darker. Category columns (the "winning"
+# error type / sensitive category) carry text, not a magnitude, so they are
+# drawn as flat tinted cells.
 
-def plot_quality_heatmap(all_quali_viz, output_path, figsize=None, error_label='error'):
+# Size-family columns (Overview + Detailed) -> spec display label.
+_SIZE_COLS = {
+    'silh': 'silh.', 'silhouette': 'silh.',
+    'min_size': 'min size', 'min_prop': 'min prop.', 'max_prop': 'max prop.',
+    'size': 'size', 'size_prop': 'size', 'count': 'size',
+    'proportion': 'prop.', 'prop': 'prop.',
+}
+
+# Error-family columns keyed by exact name (the per-cluster magnitude columns).
+# kind: 'value' | 'pvalue' | 'category'; '{e}' is replaced by the user error label.
+_ERROR_EXACT = {
+    'error': ('value', '{e}'),
+    'error_value': ('value', '{e}'),
+    'error_mean': ('value', '{e} mean'),
+    'abs_error_mean': ('value', '|{e}| mean'),
+}
+
+# Error-family columns keyed by suffix on 'error...'. Longest suffix first so
+# '_gap_sig' wins over '_gap'.
+_ERROR_SUFFIXES = [
+    ('_gap_sig', 'pvalue', '{e} gap sig.'),
+    ('_gap_class', 'category', '{e} gap class'),
+    ('_gap_cat', 'category', '{e} gap cat.'),
+    ('_gap', 'value', '{e} gap'),
+    ('_sep', 'pvalue', '{e} sep.'),
+    ('_cat', 'category', '{e} cat.'),
+    ('_value', 'value', '{e}'),
+]
+
+# Sensitive-feature columns keyed by suffix on '<F>...'. Longest suffix first.
+_FEAT_SUFFIXES = [
+    ('_gap_sig', 'pvalue', '{f} gap sig.'),
+    ('_gap_cat', 'category', '{f} gap cat.'),
+    ('_gap', 'value', '{f} gap'),
+    ('_sep', 'pvalue', '{f} sep.'),
+    ('_cat', 'category', '{f} cat.'),
+    ('_value', 'value', '{f}'),
+]
+
+# (family, kind) -> matplotlib colormap. *_r reverses so lower p = darker.
+_FAMILY_CMAP = {
+    ('size', 'value'): 'Blues', ('size', 'pvalue'): 'Blues_r',
+    ('error', 'value'): 'Reds', ('error', 'pvalue'): 'Reds_r',
+    ('sensitive', 'value'): 'Purples', ('sensitive', 'pvalue'): 'Purples_r',
+    ('meta', 'value'): 'Greys', ('meta', 'pvalue'): 'Greys_r',
+}
+
+# Flat background tint for category (text) cells, per family.
+_FAMILY_TINT = {
+    'size': '#dbe9f6', 'error': '#fcdbd5', 'sensitive': '#e7e1f2', 'meta': '#eeeeee',
+}
+
+
+def classify_column(col, error_label='error'):
+  """Map a result-table column to (family, kind, display_label).
+
+  family: 'size' | 'error' | 'sensitive' | 'meta'
+  kind:   'value' | 'pvalue' | 'category'
   """
-  Plot quality metrics heatmap with color-coded column groups.
+  if col in _SIZE_COLS:
+    return 'size', 'value', _SIZE_COLS[col]
+  if col in _ERROR_EXACT:
+    kind, tmpl = _ERROR_EXACT[col]
+    return 'error', kind, tmpl.format(e=error_label)
+  if col.startswith('error_'):
+    rest = col[len('error'):]  # leading '_' kept so suffixes match
+    for suf, kind, tmpl in _ERROR_SUFFIXES:
+      if rest == suf:
+        return 'error', kind, tmpl.format(e=error_label)
+    return 'error', 'value', error_label
+  for suf, kind, tmpl in _FEAT_SUFFIXES:
+    if col.endswith(suf):
+      return 'sensitive', kind, tmpl.format(f=col[:-len(suf)])
+  return 'meta', 'value', col
 
-  - Error column (error_label): Reds_r  (lower p = more significant = redder)
-  - Sensitive p-value columns: Greens_r
-  - Silhouette: Blues              (higher = better = darker blue)
-  - Balance/entropy columns: Greens
-  """
-  df = all_quali_viz.copy()
 
-  # Classify columns
-  error_cols = [c for c in df.columns if c == error_label]
-  sil_cols = [c for c in df.columns if c == 'silhouette']
-  sensitive_cols = [c for c in df.columns if c not in error_cols + sil_cols]
+def display_label(col, error_label='error'):
+  """Spec display label for a result-table column (see classify_column)."""
+  return classify_column(col, error_label)[2]
 
-  groups = []
-  if error_cols:
-    groups.append((error_cols, 'Reds_r', None, None))
-  if sensitive_cols:
-    groups.append((sensitive_cols, 'Greens_r', None, None))
-  if sil_cols:
-    groups.append((sil_cols, 'Blues', None, None))
 
-  if not groups:
+def order_result_columns(cols, error_label='error'):
+  """Stable partition of columns into Size -> Error -> Sensitive -> meta order,
+  preserving the input order within each family (callers emit per-feature columns
+  contiguously, so this yields the spec column order)."""
+  fams = {'size': [], 'error': [], 'sensitive': [], 'meta': []}
+  for c in cols:
+    fams[classify_column(c, error_label)[0]].append(c)
+  return fams['size'] + fams['error'] + fams['sensitive'] + fams['meta']
+
+
+def _annot_strings(df_segment):
+  """Annotation array for a category (text) segment: NaN/None -> ''."""
+  def to_str(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+      return ''
+    return str(v)
+  return np.vectorize(to_str, otypes=[object])(df_segment.values)
+
+
+def render_result_heatmap(df, output_path, error_label='error', title=None,
+                          figsize=None, fmt='.4g'):
+  """Render a result table as a color-coded heatmap.
+
+  Columns are coloured by family (Size=blue, Error=red, Sensitive=violet); p-value
+  columns use the reversed colormap (lower = darker); category columns are drawn as
+  flat tinted text cells. Adjacent columns sharing a colormap are merged into one
+  sub-axes so the labels stay slanted and the families read as blocks. `df` columns
+  are expected to already be in display order (see order_result_columns)."""
+  cols = list(df.columns)
+  if not cols:
     return
 
-  n_groups = len(groups)
-  col_counts = [len(g[0]) for g in groups]
-  total_cols = sum(col_counts)
+  specs = [classify_column(c, error_label) for c in cols]
+  # Per-column color key: ('__cat__', family) for text cols, else (cmap, family).
+  keys = [('__cat__', fam) if kind == 'category'
+          else (_FAMILY_CMAP.get((fam, kind), 'Greys'), fam)
+          for fam, kind, _ in specs]
 
+  # Merge adjacent columns that share a color key into segments.
+  segments = []
+  for i, key in enumerate(keys):
+    if segments and segments[-1][0] == key:
+      segments[-1][1].append(i)
+    else:
+      segments.append([key, [i]])
+
+  col_counts = [len(idxs) for _, idxs in segments]
+  n_rows = len(df)
   if figsize is None:
-    n_rows = len(df)
-    figsize = (max(6, total_cols * 1.2), max(4, n_rows * 0.6))
+    figsize = (max(6, len(cols) * 1.1), max(4, n_rows * 0.6))
 
-  fig, axes = plt.subplots(1, n_groups, figsize=figsize,
+  fig, axes = plt.subplots(1, len(segments), figsize=figsize,
                            gridspec_kw={'width_ratios': col_counts, 'wspace': 0})
-  if n_groups == 1:
+  if len(segments) == 1:
     axes = [axes]
 
-  for ax, (cols, cmap, vmin, vmax) in zip(axes, groups):
-    kw = dict(annot=True, fmt='.4g', cbar=False, ax=ax, robust=True)
-    if vmin is not None:
-      kw.update(vmin=vmin, vmax=vmax)
-      kw.pop('robust')
-    sns.heatmap(df[cols], cmap=cmap, **kw)
+  for ax, ((cmap, fam), idxs) in zip(axes, segments):
+    seg_cols = [cols[i] for i in idxs]
+    sub = df[seg_cols]
+    labels = [specs[i][2] for i in idxs]
+    if cmap == '__cat__':
+      bg = pd.DataFrame(0.0, index=sub.index, columns=sub.columns)
+      sns.heatmap(bg, annot=_annot_strings(sub), fmt='', cbar=False, ax=ax,
+                  cmap=mcolors.ListedColormap([_FAMILY_TINT[fam]]),
+                  linewidths=0.5, linecolor='white')
+    else:
+      sns.heatmap(sub.astype(float), annot=True, fmt=fmt, cbar=False, ax=ax,
+                  robust=True, cmap=cmap)
     ax.xaxis.tick_top()
-    ax.tick_params(axis='x', which='major', length=0, rotation=45)
-    ax.tick_params(axis='y', which='major', length=0)
-    ax.set_xticklabels(ax.get_xticklabels(), ha='left', rotation=45, rotation_mode='anchor')
-    ax.set(xlabel='', ylabel='')
-
-  # Only show y-tick labels on the first subplot
-  for ax in axes[1:]:
-    ax.set_yticklabels([])
-
-  plt.tight_layout()
-  plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0)
-
-
-def plot_cluster_recap_heatmap(recap, cond_name, output_dir, multiclass_dummies=None):
-  """Plot one-vs-all cluster comparison heatmap with color-coded column groups."""
-  recap = recap.sort_values(by=['diff_vs_rest'], ascending=False)
-  recap = recap.copy()
-  recap['count'] = recap['count'] / recap['count'].sum()
-  recap = recap.rename(columns={"count": "size_prop"})
-  drop_cols = ['c']
-  if 'n_error' in recap.columns:
-    drop_cols.append('n_error')
-  drop_cols.extend([c for c in recap.columns if c.endswith('_n')])
-  recap = recap.drop(drop_cols, axis=1)
-
-  # Custom black→white→blue colormap for *_diff columns (neg=black, zero=white, pos=blue)
-  bwb_cmap = mcolors.LinearSegmentedColormap.from_list(
-      'bwb', [(0.0, 'black'), (0.5, 'white'), (1.0, '#1f77b4')]
-  )
-
-  suppressed_bases = set()
-  if multiclass_dummies:
-    for dummy_list in multiclass_dummies.values():
-      suppressed_bases.update(dummy_list)
-
-  def _is_per_value_stat(col):
-    for suffix in ('_prop', '_diff', '_p'):
-      if col.endswith(suffix):
-        base = col[:-len(suffix)]
-        if base in suppressed_bases or '=' in base:
-          return True
-    return False
-
-  cols = [c for c in recap.columns if not _is_per_value_stat(c)]
-
-  # Classify columns into groups (order matters for display)
-  error_rate_cols = [c for c in cols if c.endswith('_rate') or c.endswith('_mean')]
-  mw_cols = [c for c in cols if c == 'mannwhitney_p']
-  dvr_cols = [c for c in cols if c == 'diff_vs_rest']
-  prop_cols = [c for c in cols if c.endswith('_prop') and c != 'size_prop']
-  diff_cols = [c for c in cols if c.endswith('_diff') and c not in dvr_cols]
-  p_cols = [c for c in cols if c.endswith('_p') and c not in mw_cols]
-  sil_cols = [c for c in cols if c == 'silhouette']
-  size_cols = [c for c in cols if c == 'size_prop']
-  # Anything else (regression error stats)
-  other_cols = [c for c in cols if c not in (
-      error_rate_cols + mw_cols + dvr_cols + prop_cols + diff_cols + p_cols + sil_cols + size_cols
-  )]
-
-  groups = []
-  if error_rate_cols + mw_cols:
-    groups.append((error_rate_cols + mw_cols, 'Reds', None, None, '.3g'))
-  if dvr_cols:
-    groups.append((dvr_cols, 'Blues', None, None, '.3g'))
-  if prop_cols:
-    groups.append((prop_cols, 'Greens', None, None, '.3g'))
-  if diff_cols:
-    groups.append((diff_cols, bwb_cmap, -1.0, 1.0, '.3g'))
-  if p_cols:
-    groups.append((p_cols, 'Greens_r', None, None, '.3g'))
-  if sil_cols:
-    groups.append((sil_cols, 'Blues', None, None, '.3g'))
-  if size_cols:
-    groups.append((size_cols, 'Greys', None, None, '.3g'))
-  if other_cols:
-    groups.append((other_cols, 'vlag', None, None, '.3g'))
-
-  # Filter out empty groups and groups where columns aren't in recap
-  groups = [(c, cmap, vmin, vmax, fmt) for c, cmap, vmin, vmax, fmt in groups
-             if c and all(col in recap.columns for col in c)]
-
-  if not groups:
-    return
-
-  col_counts = [len(g[0]) for g in groups]
-  n_rows = len(recap)
-  fig_width = max(10, sum(col_counts) * 0.9)
-  fig_height = max(4, n_rows * 1.2)
-
-  fig, axes = plt.subplots(1, len(groups), figsize=(fig_width, fig_height),
-                           gridspec_kw={'width_ratios': col_counts, 'wspace': 0})
-  if len(groups) == 1:
-    axes = [axes]
-
-  for ax, (g_cols, cmap, vmin, vmax, fmt) in zip(axes, groups):
-    kw = dict(annot=True, fmt=fmt, cbar=False, ax=ax, robust=True)
-    if vmin is not None:
-      kw.update(vmin=vmin, vmax=vmax, center=0.0)
-      kw.pop('robust')
-    sns.heatmap(recap[g_cols], cmap=cmap, **kw)
-    ax.xaxis.tick_top()
-    ax.set(xlabel='', ylabel='')
     ax.tick_params(axis='x', which='major', length=0)
     ax.tick_params(axis='y', which='major', length=0)
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='left', rotation_mode='anchor')
+    ax.set_xticklabels(labels, rotation=45, ha='left', rotation_mode='anchor')
+    ax.set(xlabel='', ylabel='')
 
-  # Show y-tick labels only on first subplot
   for ax in axes[1:]:
     ax.set_yticklabels([])
 
-  fig.suptitle(re.sub(' +', ' ', cond_name), y=1.01)
+  if title:
+    fig.suptitle(title, y=1.02)
   plt.tight_layout()
-  plt.savefig(f'{output_dir}/' + re.sub(' +', '', cond_name) + '.png',
-              dpi=300, bbox_inches='tight', pad_inches=0)
+  plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0)
+  plt.close(fig)
+
+
+# =============================================================================
+# Visualization — Overview heatmap
+# =============================================================================
+
+def plot_quality_heatmap(all_quali_viz, output_path, figsize=None,
+                         error_label='error', title=None):
+  """Plot the Overview quality heatmap with blue/red/violet color families.
+
+  Size metrics (silhouette, cluster sizes/proportions) are blue, error metrics
+  red, sensitive-feature metrics violet; p-value columns render darker when more
+  significant. Column names are mapped to spec labels and the user `error_label`."""
+  df = all_quali_viz.copy()
+  cols = order_result_columns(list(df.columns), error_label)
+  if not cols:
+    return
+  render_result_heatmap(df[cols], output_path, error_label=error_label,
+                        title=title, figsize=figsize)
+
+
+def plot_cluster_recap_heatmap(recap, cond_name, output_dir, multiclass_dummies=None,
+                               error_label='error'):
+  """Plot the per-cluster Detailed heatmap (one row per cluster).
+
+  Columns are ordered Size -> Error -> Sensitive and coloured by family
+  (blue / red / violet) via the shared render_result_heatmap: value columns use
+  the family colormap, p-value columns its reverse (lower = darker), and category
+  columns render as flat tinted text. `multiclass_dummies` is accepted for
+  call-site compatibility but no longer used (each feature is a single column)."""
+  df = recap.copy()
+  if 'c' in df.columns:
+    df = df.set_index('c')
+    df.index = [f'cluster {i}' for i in df.index]
+  # n_error is a raw count duplicated by error_value (rate); not a display column.
+  df = df.drop(columns=[col for col in ('n_error',) if col in df.columns])
+
+  cols = order_result_columns(list(df.columns), error_label)
+  if not cols:
+    return
+  out_path = f'{output_dir}/' + re.sub(' +', '', cond_name) + '.png'
+  render_result_heatmap(df[cols], out_path, error_label=error_label,
+                        title=re.sub(' +', ' ', cond_name))
 
 
 # =============================================================================
@@ -616,7 +752,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             standardize=True, error_label=None,
                             original_sensitive_cols=None,
                             continuous_sensitive_cols=None,
-                            ohe_col_names=None):
+                            ohe_col_names=None, multiclass_option=None):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -725,7 +861,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                        distance_matrix=result.distance_matrix,
                        original_sensitive_cols=original_sensitive_cols,
                        error_label=error_label,
-                       continuous_sensitive_cols=continuous_sensitive_cols)
+                       continuous_sensitive_cols=continuous_sensitive_cols,
+                       multiclass_option=multiclass_option)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])
