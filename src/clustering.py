@@ -311,8 +311,11 @@ def cluster(
         if exclude:
             X = X.astype(float)
             numeric_mask = [i for i in range(X.shape[1]) if i not in exclude]
-            scaler = StandardScaler()
-            X[:, numeric_mask] = scaler.fit_transform(X[:, numeric_mask])
+            # When every feature is categorical/one-hot (0/1) there is nothing to
+            # standardize — e.g. a condition clustering only on sensitive OHE dummies.
+            if numeric_mask:
+                scaler = StandardScaler()
+                X[:, numeric_mask] = scaler.fit_transform(X[:, numeric_mask])
         else:
             scaler = StandardScaler()
             X = scaler.fit_transform(X)

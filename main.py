@@ -79,13 +79,26 @@ def parse_feature_weights(weight_str, regular_cols, sensitive_cols, special_cols
 def _encode_multiclass_categoricals(df, col_lists, categorical_cols_arg, algorithm, distance='euclidean'):
     """Thin wrapper around encode_categoricals.
 
-    Multi-class one-hot dummies for sensitive and proxy columns are kept in the
-    DataFrame but excluded from their respective col_lists so they don't inflate
-    the clustering feature matrix. Binary columns are unchanged.
+    Multi-class one-hot dummies (including sensitive and proxy) are inserted into
+    their col_lists so they enter the clustering feature matrix. Binary columns
+    are unchanged. Under Gower the original is factorized in place instead.
     """
     return encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
-                               multiclass_remove_from={'sensitive', 'proxy'},
                                distance=distance)
+
+
+def _build_sensitive_analysis_list(sensitive_cols, multiclass_dummies, original_sensitive_cols):
+    """Binary/numeric sensitives + readable multi-class dummies, factorized
+    originals dropped. Deduplicated: under Euclidean/Manhattan the dummies already
+    sit in sensitive_cols (clustered); under Gower sensitive_cols holds the
+    factorized original and the dummies are added back here."""
+    analysis = [c for c in sensitive_cols if c not in multiclass_dummies]
+    for orig_col, dummies in multiclass_dummies.items():
+        if orig_col in original_sensitive_cols:
+            for dc in dummies:
+                if dc not in analysis:
+                    analysis.append(dc)
+    return analysis
 
 
 def parse_args():
@@ -302,13 +315,13 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     proxy_cols = col_lists['proxy']
     special_cols = col_lists['special']
 
-    # For fairness analysis, the multi-class dummies of *sensitive* originals are still
-    # needed (proportions, chi2, entropy, balance score). Build the full analysis list
-    # by adding them back on top of the (binary-only) sensitive_cols.
-    sensitive_cols_analysis = list(sensitive_cols)
-    for orig_col, dummies in multiclass_dummies.items():
-        if orig_col in original_sensitive_cols:
-            sensitive_cols_analysis.extend(dummies)
+    # Fairness-analysis sensitive list: binary/numeric sensitives + readable
+    # multi-class dummies (factorized originals dropped), deduplicated across the
+    # Euclidean (dummies already in sensitive_cols) and Gower (factorized original
+    # in sensitive_cols) paths.
+    sensitive_cols_analysis = _build_sensitive_analysis_list(
+        sensitive_cols, multiclass_dummies, original_sensitive_cols
+    )
 
     # Build groups dict for condition generation
     groups = {}
@@ -408,6 +421,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         continuous_sensitive_cols=continuous_sensitive_cols,
         ohe_col_names=ohe_col_names,
         multiclass_option=args.error_multiclass_option,
+        error_cols=args.error_cols,
     )
 
     # Print progress for each condition
@@ -424,18 +438,22 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                              error_type=args.error_type, error_col=error_col,
                              error_label=error_label,
                              continuous_sensitive_cols=continuous_sensitive_cols,
-                             multiclass_option=args.error_multiclass_option)
+                             multiclass_option=args.error_multiclass_option,
+                             error_cols=args.error_cols)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
     # Print separability test results summary.
-    # chi_res columns: cond_descr, cond_name, error_sep, <F>_sep (one per feature).
-    skip_meta = {'cond_descr', 'cond_name', 'error_sep'}
+    # chi_res columns: cond_descr, cond_name, <error sep col(s)>, <F>_sep per feature.
+    # onehot has one 'error=<class>_sep' per class instead of a single 'error_sep'.
+    err_sep_cols = [c for c in chi_res.columns
+                    if c == 'error_sep' or (c.startswith('error=') and c.endswith('_sep'))]
+    skip_meta = {'cond_descr', 'cond_name'} | set(err_sep_cols)
     sep_cols = [c for c in chi_res.columns if c not in skip_meta]
     print("\nSeparability test results (p-values):")
-    chi_display_cols = ['cond_name', 'error_sep'] + sep_cols
+    chi_display_cols = ['cond_name'] + err_sep_cols + sep_cols
     chi_display = chi_res[chi_display_cols].copy()
-    chi_display.columns = ['Condition', 'error_sep'] + sep_cols
+    chi_display.columns = ['Condition'] + err_sep_cols + sep_cols
     print(chi_display.to_string(index=False))
 
     # Generate quality metrics
@@ -446,12 +464,13 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                                     continuous_sensitive_cols=continuous_sensitive_cols,
                                     error_col=error_col,
                                     error_type=args.error_type,
-                                    multiclass_option=args.error_multiclass_option)
+                                    multiclass_option=args.error_multiclass_option,
+                             error_cols=args.error_cols)
 
     if not args.no_plots:
       # Separability test heatmap (omnibus p-values) — same blue/red/violet styling
       # and slanted labels as the Overview heatmap (error=red, sensitive=violet).
-      chi_viz_cols = ['error_sep'] + sep_cols
+      chi_viz_cols = err_sep_cols + sep_cols
       chi_res_viz = chi_res[chi_viz_cols].copy()
       chi_res_viz.index = chi_res['cond_name'].str.strip()
       plot_quality_heatmap(chi_res_viz, f"{output_dir}/chi_res_heatmap.png",
@@ -580,7 +599,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         # Add rule: most distinctive sensitive feature per cluster (largest |gap|).
         # Derived from the per-feature <F>_gap columns (signed cluster-vs-rest gap);
         # exclude the error column's own gap.
-        gap_cols = [c for c in recap_i.columns if c.endswith('_gap') and c != 'error_gap']
+        gap_cols = [c for c in recap_i.columns if c.endswith('_gap')
+                    and not c.startswith('error_') and not c.startswith('error=')]
         if gap_cols:
             def _make_rule(row):
                 vals = row[gap_cols].abs()
@@ -597,11 +617,21 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         else:
             recap_i.insert(1, 'rule', '')
 
-        # Add OVERALL row with the omnibus error separability p-value.
-        error_sep = chi_res_lookup.loc[cond_name, 'error_sep'] if chi_res_lookup is not None and cond_name in chi_res_lookup.index else np.nan
+        # Add OVERALL row with the omnibus error separability p-value(s).
+        # onehot has one 'error=<class>_sep' per class instead of a single 'error_sep'.
         overall_row = {col: '' for col in recap_i.columns}
         overall_row['c'] = 'OVERALL'
-        overall_row['rule'] = f"error_sep: {round(error_sep, 4) if not (error_sep is None or np.isnan(error_sep)) else 'n/a'}"
+        if chi_res_lookup is not None and cond_name in chi_res_lookup.index:
+            row = chi_res_lookup.loc[cond_name]
+            es_cols = [c for c in chi_res_lookup.columns
+                       if c == 'error_sep' or (c.startswith('error=') and c.endswith('_sep'))]
+            parts = []
+            for c in es_cols:
+                v = row[c]
+                parts.append(f"{c}: {round(v, 4) if not (v is None or pd.isna(v)) else 'n/a'}")
+            overall_row['rule'] = '; '.join(parts) if parts else 'error_sep: n/a'
+        else:
+            overall_row['rule'] = 'error_sep: n/a'
         recap_i = pd.concat([recap_i, pd.DataFrame([overall_row])], ignore_index=True)
 
         # Append separability test results (feature-level stat tests across clusters)
@@ -669,18 +699,23 @@ def main():
             raise ValueError("--error_type regression requires either --error_col or both --y_true_col and --y_pred_col")
 
     # Multi-class error: derive a categorical/indicator error column from y_true/y_pred.
+    args.error_cols = None  # set for onehot (one binary error column per class)
     if args.error_type == 'multiclass':
         if not (args.y_true_col and args.y_pred_col):
             raise ValueError("--error_type multiclass requires both --y_true_col and --y_pred_col")
-        if args.error_multiclass_option == 'onehot':
-            raise NotImplementedError(
-                "--error_multiclass_option onehot (one error-column set per class) is not "
-                "wired through the result tables yet; use accuracy, per_class, or per_cell."
-            )
         err_df = multiclass_error_types(df[args.y_true_col], df[args.y_pred_col],
                                         args.error_multiclass_option)
-        df['_multiclass_error'] = err_df['error'].values
-        args.error_col = '_multiclass_error'
+        if args.error_multiclass_option == 'onehot':
+            # One binary error column per class -> one result-table set each. A
+            # single 'any error' indicator drives clustering's ERR group + scoring.
+            for col in err_df.columns:
+                df[col] = err_df[col].values
+            args.error_cols = list(err_df.columns)
+            df['_multiclass_error'] = (df[args.y_true_col] != df[args.y_pred_col]).astype(int)
+            args.error_col = '_multiclass_error'
+        else:
+            df['_multiclass_error'] = err_df['error'].values
+            args.error_col = '_multiclass_error'
         print(f"  Derived multi-class error ('{args.error_multiclass_option}') "
               f"from {args.y_true_col} vs {args.y_pred_col}")
 
@@ -814,11 +849,10 @@ def main():
     proxy_cols = col_lists['proxy']
     special_cols = col_lists['special']
 
-    # Full sensitive list for fairness analysis (binary + multi-class dummies)
-    sensitive_cols_analysis = list(sensitive_cols)
-    for orig_col, dummies in multiclass_dummies.items():
-        if orig_col in original_sensitive_cols:
-            sensitive_cols_analysis.extend(dummies)
+    # Fairness-analysis sensitive list (see _build_sensitive_analysis_list).
+    sensitive_cols_analysis = _build_sensitive_analysis_list(
+        sensitive_cols, multiclass_dummies, original_sensitive_cols
+    )
 
     # Build clustering features
     clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols
@@ -948,7 +982,8 @@ def main():
                            distance_matrix=result.distance_matrix,
                            original_sensitive_cols=original_sensitive_cols,
                            continuous_sensitive_cols=continuous_sensitive_cols,
-                           multiclass_option=args.error_multiclass_option)
+                           multiclass_option=args.error_multiclass_option,
+                           error_cols=args.error_cols)
 
         # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")

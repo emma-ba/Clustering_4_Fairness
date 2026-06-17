@@ -5,7 +5,7 @@ Fairness metrics for clustering analysis.
 import numpy as np
 import pandas as pd
 from scipy import stats
-from scipy.stats import mannwhitneyu, chi2_contingency, kruskal
+from scipy.stats import mannwhitneyu, chi2_contingency
 
 
 def cluster_proportion(c_n, c_count):
@@ -143,6 +143,14 @@ def overview_gap_cat(values, labels):
     return best_cat
 
 
+def _fisher_2x2(a_pos, a_neg, b_pos, b_neg):
+    """Fisher exact p-value for a 2x2 table [[a_pos, a_neg], [b_pos, b_neg]]."""
+    try:
+        return round(float(stats.fisher_exact([[a_pos, a_neg], [b_pos, b_neg]]).pvalue), 6)
+    except ValueError:
+        return np.nan
+
+
 def _fisher_2x2_p(df, hi, lo, pos):
     """Fisher exact p-value for the 2x2 [pos, neg] x [cluster hi, cluster lo] table."""
     def counts(cl):
@@ -151,10 +159,7 @@ def _fisher_2x2_p(df, hi, lo, pos):
         return p, len(s) - p
     ph, nh = counts(hi)
     pl, nl = counts(lo)
-    try:
-        return round(float(stats.fisher_exact([[ph, nh], [pl, nl]]).pvalue), 6)
-    except ValueError:
-        return np.nan
+    return _fisher_2x2(ph, nh, pl, nl)
 
 
 def extreme_pair_gap_p(values, labels, kind):
@@ -368,14 +373,6 @@ def multiclass_error_types(y_true, y_pred, option):
         f"Unknown multiclass error option '{option}'. "
         "Choose from: accuracy, per_class, per_cell, onehot."
     )
-
-
-def _fisher_2x2(a_pos, a_neg, b_pos, b_neg):
-    """Fisher exact p-value for a 2x2 table [[a_pos, a_neg], [b_pos, b_neg]]."""
-    try:
-        return round(float(stats.fisher_exact([[a_pos, a_neg], [b_pos, b_neg]]).pvalue), 6)
-    except ValueError:
-        return np.nan
 
 
 def onevsall_gap_p(cluster_vals, rest_vals, kind):
