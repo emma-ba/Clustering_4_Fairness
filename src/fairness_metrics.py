@@ -172,8 +172,9 @@ def _fisher_2x2_p(df, hi, lo, pos):
 def extreme_pair_gap_p(values, labels, kind):
     """Overview *_gap_sig: significance of the max gap, comparing ONLY the two
     clusters that define it (the min- and max-statistic clusters). binary -> Fisher
-    exact (2x2); multicat -> chi2 over all categories for the two extreme clusters;
-    numeric -> one-way ANOVA. NaN on degenerate input."""
+    exact 2x2 on the positive value; multicat -> Fisher exact 2x2 on the winning
+    category (largest cross-cluster spread); numeric -> one-way ANOVA. NaN on
+    degenerate input."""
     df = pd.DataFrame({"v": pd.Series(values).values, "c": np.asarray(labels)})
     df = df[df["c"] != -1].dropna(subset=["v"])
     clusters = sorted(df["c"].unique())
@@ -198,30 +199,20 @@ def extreme_pair_gap_p(values, labels, kind):
         hi, lo = max(props, key=props.get), min(props, key=props.get)
         return _fisher_2x2_p(df, hi, lo, pos)
 
-    # multicat: winning category = largest cross-cluster spread; test its two
-    # extreme clusters with a chi2 over all categories.
-    best_spread, best_pair = -1.0, None
+    # multicat: winning category = largest cross-cluster spread; Fisher 2x2 on that
+    # category between its two extreme clusters (the same category overview_gap_cat
+    # reports).
+    best_spread, best = -1.0, None
     for cat in sorted(df["v"].unique()):
         props = {cl: (df.loc[df["c"] == cl, "v"] == cat).mean() for cl in clusters}
         hi, lo = max(props, key=props.get), min(props, key=props.get)
         spread = props[hi] - props[lo]
         if spread > best_spread:
-            best_spread, best_pair = spread, (hi, lo)
-    if best_pair is None:
+            best_spread, best = spread, (cat, hi, lo)
+    if best is None:
         return np.nan
-    hi, lo = best_pair
-    cats = sorted(df["v"].unique())
-    ch = df.loc[df["c"] == hi, "v"]
-    cl_vals = df.loc[df["c"] == lo, "v"]
-    table = np.array([[int((ch == k).sum()) for k in cats],
-                      [int((cl_vals == k).sum()) for k in cats]])
-    table = table[:, table.sum(axis=0) > 0]  # drop categories absent from both
-    if table.shape[1] < 2 or (table.sum(axis=1) == 0).any():
-        return np.nan
-    try:
-        return round(float(chi2_contingency(table).pvalue), 6)
-    except ValueError:
-        return np.nan
+    cat, hi, lo = best
+    return _fisher_2x2_p(df, hi, lo, cat)
 
 
 def onevsall_gap(cluster_vals, rest_vals, kind):
