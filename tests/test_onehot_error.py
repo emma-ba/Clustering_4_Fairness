@@ -40,6 +40,9 @@ def test_make_recap_onehot_emits_per_class_sets():
     # value = per-cluster positive rate
     assert recap.loc[recap["c"] == 0, "error=0"].iloc[0] == pytest.approx(0.25)
     assert recap.loc[recap["c"] == 1, "error=1"].iloc[0] == pytest.approx(0.40)
+    # a cluster with zero class errors must read 0.0, not 1.0
+    assert recap.loc[recap["c"] == 1, "error=0"].iloc[0] == pytest.approx(0.0)
+    assert recap.loc[recap["c"] == 0, "error=1"].iloc[0] == pytest.approx(0.0)
     # no single-error columns in onehot mode
     assert "error_gap" not in cols and "error_value" not in cols
 

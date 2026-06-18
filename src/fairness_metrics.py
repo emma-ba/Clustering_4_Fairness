@@ -74,10 +74,15 @@ def feature_kind(series, is_continuous=False):
     return "binary" if pd.Series(series).nunique(dropna=True) <= 2 else "multicat"
 
 
-def cluster_value(values, kind):
+def cluster_value(values, kind, neg=None):
     """Detail F_value for one cluster: binary->proportion of positive,
     numeric->median, multicat->proportion of the modal category. The modal
-    category's label is reported separately by cluster_value_cat()."""
+    category's label is reported separately by cluster_value_cat().
+
+    For binary, `neg` is the GLOBAL negative label (e.g. 0). Proportion positive =
+    fraction not equal to `neg`, so an all-negative cluster correctly reads 0 (using
+    the per-cluster max would mislabel an all-zero cluster as 100% positive). Falls
+    back to the local minimum when `neg` is unspecified (standalone use)."""
     s = pd.Series(values).dropna()
     if len(s) == 0:
         return np.nan
@@ -85,7 +90,9 @@ def cluster_value(values, kind):
         return float(s.median())
     if kind == "multicat":
         return float((s == s.mode().iloc[0]).mean())
-    return float((s == s.max()).mean())  # binary: proportion of the '1' value
+    if neg is None:
+        neg = s.min()
+    return float((s != neg).mean())  # binary: proportion of the non-negative value
 
 
 def cluster_value_cat(values, kind):

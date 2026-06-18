@@ -21,6 +21,18 @@ def test_feature_kind_numeric_when_declared():
 def test_cluster_value_binary_is_proportion_of_positive():
     assert cluster_value([0, 1, 1, 1], "binary") == pytest.approx(0.75)
 
+def test_cluster_value_binary_all_negative_is_zero():
+    # an all-negative cluster must read 0.0, not 1.0 (no positives present)
+    assert cluster_value([0, 0, 0, 0], "binary") == pytest.approx(0.0)
+
+def test_cluster_value_binary_all_positive_uses_global_neg():
+    # all-positive cluster: the global negative label is supplied so it reads 1.0
+    assert cluster_value([1, 1, 1], "binary", neg=0) == pytest.approx(1.0)
+
+def test_cluster_value_binary_nonzero_coding():
+    # binary coded {1,2}: 2 is positive (global negative = 1)
+    assert cluster_value([1, 2, 2, 2], "binary", neg=1) == pytest.approx(0.75)
+
 def test_cluster_value_numeric_is_median():
     assert cluster_value([1.0, 2.0, 9.0], "numeric") == pytest.approx(2.0)
 

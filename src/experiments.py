@@ -122,6 +122,10 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # Per-cluster accumulators. Category columns (winning category label) are only
   # emitted for multi-categorical features, so accumulate them for those only.
   multicat_cols = [F for F in sensitive_cols if kinds[F] == 'multicat']
+  # Global negative label per binary column (the proportion-positive denominator),
+  # so an all-negative cluster reads 0 rather than 100% (see cluster_value).
+  binary_neg = {F: data_result[F].min() for F in sensitive_cols if kinds[F] == 'binary'}
+  oh_neg = {ec: data_result[ec].min() for ec in error_cols}
   error_gap_sig = []
   error_gap = []
   # multicat-error-only accumulators (mirror the multicat feature columns).
@@ -158,7 +162,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
 
     # F_value is always computable (no one-vs-all needed)
     for F in sensitive_cols:
-      feat_value[F].append(cluster_value(c_data[F], kinds[F]))
+      feat_value[F].append(cluster_value(c_data[F], kinds[F], neg=binary_neg.get(F)))
       if kinds[F] == 'multicat':
         feat_cat[F].append(cluster_value_cat(c_data[F], kinds[F]))
 
@@ -169,7 +173,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     # onehot: per-class positive rate, always computable.
     if onehot:
       for ec in error_cols:
-        oh_value[ec].append(cluster_value(c_data[ec], 'binary'))
+        oh_value[ec].append(cluster_value(c_data[ec], 'binary', neg=oh_neg[ec]))
 
     # Get out-of-cluster data
     rest_data = data_result.loc[data_result['clusters'] != c]
