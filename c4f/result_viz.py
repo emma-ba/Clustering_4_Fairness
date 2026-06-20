@@ -201,15 +201,13 @@ def plot_quality_heatmap(all_quali_viz, output_path, figsize=None,
                         title=title, figsize=figsize)
 
 
-def plot_cluster_recap_heatmap(recap, cond_name, output_dir, multiclass_dummies=None,
-                               error_label='error'):
+def plot_cluster_recap_heatmap(recap, cond_name, output_dir, error_label='error'):
   """Plot the per-cluster Detailed heatmap (one row per cluster).
 
   Columns are ordered Size -> Error -> Sensitive and coloured by family
   (blue / red / violet) via the shared render_result_heatmap: value columns use
   the family colormap, p-value columns its reverse (lower = darker), and category
-  columns render as flat tinted text. `multiclass_dummies` is accepted for
-  call-site compatibility but no longer used (each feature is a single column)."""
+  columns render as flat tinted text."""
   df = recap.copy()
   if 'c' in df.columns:
     df = df.set_index('c')

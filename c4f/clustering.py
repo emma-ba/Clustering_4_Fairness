@@ -18,7 +18,8 @@ from sklearn.cluster import DBSCAN, HDBSCAN, KMeans, BisectingKMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from kmodes.kprototypes import KPrototypes, euclidean_dissim, matching_dissim
-from sklearn_extra.cluster import KMedoids
+# KMedoids lives in scikit-learn-extra (no numpy-2 wheels); imported lazily at the
+# two kmedoids call sites so the rest of the package loads fine without it.
 from .scoring import ScoringFn, silhouette_scorer
 @dataclass
 class ClusteringResult:
@@ -164,6 +165,7 @@ def _find_best_k(
             clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X_fit)
         elif algorithm == "kmedoids":
+            from sklearn_extra.cluster import KMedoids
             clusterer = KMedoids(n_clusters=k, metric=kmedoids_metric, random_state=random_state, max_iter=max_iter)
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn_extra")
@@ -406,6 +408,7 @@ def cluster(
                 clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kmedoids":
+                from sklearn_extra.cluster import KMedoids
                 clusterer = KMedoids(n_clusters=n_clusters, metric=kmedoids_metric, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kprototypes":

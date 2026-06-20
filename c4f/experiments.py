@@ -36,7 +36,7 @@ SILHOUETTE_WORKING_MEMORY_MIB = 128
 # Utils for Results - Recap
 # =============================================================================
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, error_cols_kind='binary'):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, error_cols_kind='binary'):
   """
   Create a per-cluster Detail recap of cluster info, error stats, and per-feature
   one-vs-all fairness metrics.
@@ -370,7 +370,7 @@ def separability_check(data, labels, columns):
 # Utils for Results - Chi-Square Tests
 # =============================================================================
 
-def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', error_label=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None):
+def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', continuous_sensitive_cols=None, multiclass_option=None, error_cols=None):
   """
   Compute one omnibus separability p-value per condition for the error column
   and for each sensitive feature.
@@ -392,8 +392,6 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
       'binary' (error treated as binary) or 'regression' (error treated as numeric).
   error_col : str
       Name of the error column in the per-condition result DataFrames.
-  error_label : str, optional
-      Unused for column naming (kept for signature compatibility).
   continuous_sensitive_cols : list, optional
       Subset of sensitive_cols to treat as numeric regardless of cardinality.
 
@@ -458,7 +456,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 # Utils for Results - All Quality Metrics
 # =============================================================================
 
-def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None, error_cols=None, error_cols_kind='binary'):
+def recap_quali_metrics(chi_res, results, sensitive_cols=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None, error_cols=None, error_cols_kind='binary'):
   """
   Build the Overview frame: per-condition silhouette, cluster-size summary, error
   separability / gap / gap-significance, and per-feature gap / gap-significance.
@@ -483,8 +481,6 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
       Output of make_chi_tests (provides error_sep).
   results : dict
       Results from run_experiments_generic().
-  exp_condition : pd.DataFrame
-      Experimental conditions (unused, kept for signature compatibility).
   sensitive_cols : list, optional
       Sensitive column names. One <F>_gap/<F>_gap_sig pair per feature.
   continuous_sensitive_cols : list, optional
@@ -605,9 +601,9 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
 # =============================================================================
 # Visualization — result-table heatmaps (see src/result_viz.py)
 # =============================================================================
-# Re-exported so existing callers (main.py, tests) keep importing these from
-# src.experiments; the implementations live in result_viz to keep this module
-# focused on table building.
+# Re-exported so existing callers keep importing these from c4f.experiments;
+# the implementations live in result_viz to keep this module focused on table
+# building.
 from .result_viz import (  # noqa: E402,F401
     classify_column, order_result_columns,
     render_result_heatmap, plot_quality_heatmap, plot_cluster_recap_heatmap,
@@ -626,8 +622,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             min_cluster_size=15, min_samples=5, eps=0.5,
                             min_datapoints=None, feature_weights=None,
                             error_type='binary', categorical_col_names=None,
-                            standardize=True, error_label=None,
-                            original_sensitive_cols=None,
+                            standardize=True,
                             continuous_sensitive_cols=None,
                             ohe_col_names=None, multiclass_option=None,
                             error_cols=None, error_cols_kind='binary'):
@@ -737,8 +732,6 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                        error_type=error_type,
                        feature_matrix=result.feature_matrix,
                        distance_matrix=result.distance_matrix,
-                       original_sensitive_cols=original_sensitive_cols,
-                       error_label=error_label,
                        continuous_sensitive_cols=continuous_sensitive_cols,
                        multiclass_option=multiclass_option,
                        error_cols=error_cols, error_cols_kind=error_cols_kind)
