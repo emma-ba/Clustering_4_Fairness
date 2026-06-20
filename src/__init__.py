@@ -28,8 +28,6 @@ from .visualization import (
     plot_quality_metrics_heatmap,
 )
 from .fairness_metrics import (
-    cluster_proportion,
-    one_vs_all_p_binary,
     one_vs_all_p_continuous,
     mean_diff,
     size_metrics,
@@ -68,8 +66,6 @@ __all__ = [
     "plot_silhouette_heatmap",
     "plot_quality_metrics_heatmap",
     # fairness_metrics
-    "cluster_proportion",
-    "one_vs_all_p_binary",
     "one_vs_all_p_continuous",
     "mean_diff",
     "size_metrics",

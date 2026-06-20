@@ -82,10 +82,11 @@ def classify_column(col, error_label='error'):
     kind, tmpl = _ERROR_EXACT[col]
     return 'error', kind, tmpl.format(e=error_label)
   if col.startswith('error='):
-    # onehot per-class error columns: 'error=<class>[_gap|_gap_sig|_sep]'
+    # per-class error columns: 'error=<class>[_gap|_gap_sig|_sep|_cat|_gap_cat|_gap_class]'
     rest = col[len('error='):]
-    for suf, kind, lbl in (('_gap_sig', 'pvalue', ' gap sig.'), ('_sep', 'pvalue', ' sep.'),
-                           ('_gap', 'value', ' gap')):
+    for suf, kind, lbl in (('_gap_sig', 'pvalue', ' gap sig.'), ('_gap_class', 'category', ' gap class'),
+                           ('_gap_cat', 'category', ' gap cat.'), ('_sep', 'pvalue', ' sep.'),
+                           ('_gap', 'value', ' gap'), ('_cat', 'category', ' cat.')):
       if rest.endswith(suf):
         return 'error', kind, f'{error_label}={rest[:-len(suf)]}{lbl}'
     return 'error', 'value', f'{error_label}={rest}'
@@ -99,11 +100,6 @@ def classify_column(col, error_label='error'):
     if col.endswith(suf):
       return 'sensitive', kind, tmpl.format(f=col[:-len(suf)])
   return 'meta', 'value', col
-
-
-def display_label(col, error_label='error'):
-  """Spec display label for a result-table column (see classify_column)."""
-  return classify_column(col, error_label)[2]
 
 
 def order_result_columns(cols, error_label='error'):

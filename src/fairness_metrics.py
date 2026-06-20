@@ -8,11 +8,6 @@ from scipy import stats
 from scipy.stats import mannwhitneyu, chi2_contingency
 
 
-def cluster_proportion(c_n, c_count):
-    """Proportion of a binary group in a cluster."""
-    return float(c_n) / c_count if c_count > 0 else 0.0
-
-
 def size_metrics(labels):
     """Overview size summary: smallest cluster size, and smallest / largest cluster
     proportion of the non-noise population. All NaN if there are no clusters."""
@@ -27,21 +22,6 @@ def size_metrics(labels):
         "min_prop": float(counts.min() / total),
         "max_prop": float(counts.max() / total),
     }
-
-
-def one_vs_all_p_binary(c_n, c_count, rest_n, rest_count):
-    """
-    Poisson means test p-value for a binary attribute (one cluster vs rest).
-
-    Handles zero counts by flipping to the complement count.
-    """
-    if (c_n < 1) or (c_count < 1) or (rest_n < 1) or (rest_count < 1):
-        res = stats.poisson_means_test(
-            c_count - c_n, c_count, rest_count - rest_n, rest_count
-        )
-    else:
-        res = stats.poisson_means_test(c_n, c_count, rest_n, rest_count)
-    return round(res.pvalue, 3)
 
 
 def one_vs_all_p_continuous(c_vals, rest_vals):
@@ -329,7 +309,8 @@ def error_kind_for(error_type, multiclass_option=None):
     columns are 0/1 indicators)."""
     if error_type == "regression":
         return "numeric"
-    if error_type == "multiclass" and multiclass_option in ("per_class", "per_cell"):
+    if error_type == "multiclass" and multiclass_option in (
+            "per_class", "per_cell", "precision", "binary_cells"):
         return "multicat"
     return "binary"
 
@@ -348,6 +329,12 @@ def multiclass_error_types(y_true, y_pred, option):
       misclassified rows and 'correct' for correct rows (multicat error).
     - 'onehot'   : one binary 'error=<c>' column per true class c (sorted), 1 where
       a row of true class c was misclassified (one-vs-all error indicator).
+    - 'precision': single 'error' column, the PREDICTED-class label (as str) for
+      misclassified rows and 'correct' otherwise (errors grouped by predicted class).
+    - 'binary_cells': single 'error' column with the binary confusion cell TP / TN /
+      FP / FN (positive = the larger label). For 2-class problems.
+    - 'classwise': one 'error=<c>' column per class c, the full one-vs-all confusion
+      cell TP / FN / FP / TN for that class (each column multi-categorical).
     """
     yt = pd.Series(np.asarray(y_true)).reset_index(drop=True)
     yp = pd.Series(np.asarray(y_pred)).reset_index(drop=True)
@@ -358,18 +345,37 @@ def multiclass_error_types(y_true, y_pred, option):
     if option == "per_class":
         col = np.where(wrong, yt.astype(str), "correct")
         return pd.DataFrame({"error": col})
+    if option == "precision":
+        col = np.where(wrong, yp.astype(str), "correct")
+        return pd.DataFrame({"error": col})
     if option == "per_cell":
         cell = yt.astype(str) + "→" + yp.astype(str)
         col = np.where(wrong, cell, "correct")
         return pd.DataFrame({"error": col})
-    if option == "onehot":
+    if option == "binary_cells":
+        pos = max(pd.concat([yt, yp]).unique())
+        col = np.select(
+            [(yt == pos) & (yp == pos), (yt != pos) & (yp != pos),
+             (yt != pos) & (yp == pos), (yt == pos) & (yp != pos)],
+            ["TP", "TN", "FP", "FN"],
+        )
+        return pd.DataFrame({"error": col})
+    if option in ("onehot", "classwise"):
         classes = sorted(pd.unique(yt))
+        if option == "onehot":
+            return pd.DataFrame({
+                f"error={c}": ((yt == c) & wrong).astype(int) for c in classes
+            })
         return pd.DataFrame({
-            f"error={c}": ((yt == c) & wrong).astype(int) for c in classes
+            f"error={c}": np.select(
+                [(yt == c) & (yp == c), (yt == c) & (yp != c),
+                 (yt != c) & (yp == c), (yt != c) & (yp != c)],
+                ["TP", "FN", "FP", "TN"],
+            ) for c in classes
         })
     raise ValueError(
-        f"Unknown multiclass error option '{option}'. "
-        "Choose from: accuracy, per_class, per_cell, onehot."
+        f"Unknown multiclass error option '{option}'. Choose from: accuracy, "
+        "per_class, precision, per_cell, binary_cells, onehot, classwise."
     )
 
 
@@ -402,18 +408,3 @@ def onevsall_gap_p(cluster_vals, rest_vals, kind):
     return _fisher_2x2(cp, len(cs) - cp, rp, len(rs) - rp)
 
 
-def onevsall_categorical_p(cluster_vals, rest_vals):
-    """Detail multicat F_sep: chi2 on (categories x [cluster, rest])."""
-    cs, rs = pd.Series(cluster_vals).dropna(), pd.Series(rest_vals).dropna()
-    cats = sorted(set(cs.unique()) | set(rs.unique()))
-    if len(cats) < 2:
-        return np.nan
-    table = np.array([[int((cs == k).sum()) for k in cats],
-                      [int((rs == k).sum()) for k in cats]])
-    table = table[:, table.sum(axis=0) > 0]  # drop all-absent categories
-    if table.shape[1] < 2 or (table.sum(axis=1) == 0).any():
-        return np.nan
-    try:
-        return round(float(chi2_contingency(table).pvalue), 6)
-    except ValueError:
-        return np.nan

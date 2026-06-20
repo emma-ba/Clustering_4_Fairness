@@ -36,7 +36,7 @@ SILHOUETTE_WORKING_MEMORY_MIB = 128
 # Utils for Results - Recap
 # =============================================================================
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, error_cols_kind='binary'):
   """
   Create a per-cluster Detail recap of cluster info, error stats, and per-feature
   one-vs-all fairness metrics.
@@ -122,20 +122,26 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # Per-cluster accumulators. Category columns (winning category label) are only
   # emitted for multi-categorical features, so accumulate them for those only.
   multicat_cols = [F for F in sensitive_cols if kinds[F] == 'multicat']
+  # Per-class error columns (onehot / classwise) carry their own kind: 'binary'
+  # one-vs-all indicators, or 'multicat' TP/FN/FP/TN confusion cells.
+  oh_kind = error_cols_kind if onehot else 'binary'
   # Global negative label per binary column (the proportion-positive denominator),
   # so an all-negative cluster reads 0 rather than 100% (see cluster_value).
   binary_neg = {F: data_result[F].min() for F in sensitive_cols if kinds[F] == 'binary'}
-  oh_neg = {ec: data_result[ec].min() for ec in error_cols}
+  oh_neg = {ec: data_result[ec].min() for ec in error_cols} if oh_kind == 'binary' else {}
   error_gap_sig = []
   error_gap = []
   # multicat-error-only accumulators (mirror the multicat feature columns).
   error_value_acc = []
   error_cat_acc = []
   error_gap_cat_acc = []
-  # onehot-only accumulators: one [value, gap, gap_sig] set per binary error class.
+  # per-class error accumulators: one [value, gap, gap_sig] set per class, plus
+  # cat / gap_cat when the columns are multi-categorical (classwise).
   oh_value = {ec: [] for ec in error_cols}
   oh_gap = {ec: [] for ec in error_cols}
   oh_gap_sig = {ec: [] for ec in error_cols}
+  oh_cat = {ec: [] for ec in error_cols}
+  oh_gap_cat = {ec: [] for ec in error_cols}
   feat_value = {F: [] for F in sensitive_cols}
   feat_gap_sig = {F: [] for F in sensitive_cols}
   feat_gap = {F: [] for F in sensitive_cols}
@@ -170,10 +176,13 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     if error_kind == 'multicat':
       error_value_acc.append(cluster_value(c_data[error_col], 'multicat'))
       error_cat_acc.append(cluster_value_cat(c_data[error_col], 'multicat'))
-    # onehot: per-class positive rate, always computable.
+    # per-class error value (positive rate, or modal-cell proportion + label),
+    # always computable.
     if onehot:
       for ec in error_cols:
-        oh_value[ec].append(cluster_value(c_data[ec], 'binary', neg=oh_neg[ec]))
+        oh_value[ec].append(cluster_value(c_data[ec], oh_kind, neg=oh_neg.get(ec)))
+        if oh_kind == 'multicat':
+          oh_cat[ec].append(cluster_value_cat(c_data[ec], 'multicat'))
 
     # Get out-of-cluster data
     rest_data = data_result.loc[data_result['clusters'] != c]
@@ -186,6 +195,8 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
       for ec in error_cols:
         oh_gap[ec].append(np.nan)
         oh_gap_sig[ec].append(np.nan)
+        if oh_kind == 'multicat':
+          oh_gap_cat[ec].append(np.nan)
       for F in sensitive_cols:
         feat_gap_sig[F].append(np.nan)
         feat_gap[F].append(np.nan)
@@ -205,8 +216,10 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     # most-divergent category) via onevsall_gap_p. onehot: one binary set per class.
     if onehot:
       for ec in error_cols:
-        oh_gap[ec].append(round(onevsall_gap(c_data[ec], rest_data[ec], 'binary'), 4))
-        oh_gap_sig[ec].append(onevsall_gap_p(c_data[ec], rest_data[ec], 'binary'))
+        oh_gap[ec].append(round(onevsall_gap(c_data[ec], rest_data[ec], oh_kind), 4))
+        oh_gap_sig[ec].append(onevsall_gap_p(c_data[ec], rest_data[ec], oh_kind))
+        if oh_kind == 'multicat':
+          oh_gap_cat[ec].append(onevsall_gap_cat(c_data[ec], rest_data[ec]))
     else:
       if error_kind == 'numeric':
         c_errors = c_data[error_col].values
@@ -237,10 +250,14 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # multi-categorical feature.
   new_cols = {}
   if onehot:
-    # One [value, gap, gap_sig] set per class; no single-error columns.
+    # One [value, (cat), gap, (gap_cat), gap_sig] set per class; no single-error cols.
     for ec in error_cols:
-      new_cols[ec] = np.around(oh_value[ec], 3)
-      new_cols[f'{ec}_gap'] = np.around(oh_gap[ec], 3)
+      new_cols[ec] = np.around(np.asarray(oh_value[ec], dtype=float), 3) if oh_kind == 'binary' else oh_value[ec]
+      if oh_kind == 'multicat':
+        new_cols[f'{ec}_cat'] = oh_cat[ec]
+      new_cols[f'{ec}_gap'] = np.around(np.asarray(oh_gap[ec], dtype=float), 3)
+      if oh_kind == 'multicat':
+        new_cols[f'{ec}_gap_cat'] = oh_gap_cat[ec]
       new_cols[f'{ec}_gap_sig'] = oh_gap_sig[ec]
   else:
     if error_kind == 'multicat':
@@ -441,7 +458,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 # Utils for Results - All Quality Metrics
 # =============================================================================
 
-def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None, error_cols=None):
+def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, original_sensitive_cols=None, error_label=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None, error_cols=None, error_cols_kind='binary'):
   """
   Build the Overview frame: per-condition silhouette, cluster-size summary, error
   separability / gap / gap-significance, and per-feature gap / gap-significance.
@@ -483,6 +500,7 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
   error_kind = error_kind_for(error_type, multiclass_option)
   onehot = bool(error_cols)
   error_cols = list(error_cols or [])
+  oh_kind = error_cols_kind if onehot else 'binary'
 
   # Feature kinds are constant across conditions (they depend only on the column
   # data, not the cluster labels), so classify once from the first condition.
@@ -497,8 +515,9 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
   min_size, min_prop, max_prop = [], [], []
   error_gap, error_gap_sig = [], []
   error_gap_class = []  # multicat error only: winning error class behind the gap
-  oh_gap = {ec: [] for ec in error_cols}      # onehot: per-class overview gap
-  oh_gap_sig = {ec: [] for ec in error_cols}  # onehot: per-class extreme-pair sig
+  oh_gap = {ec: [] for ec in error_cols}        # per-class overview gap
+  oh_gap_sig = {ec: [] for ec in error_cols}    # per-class extreme-pair sig
+  oh_gap_class = {ec: [] for ec in error_cols}  # classwise: winning cell behind gap
   feat_gap = {F: [] for F in sensitive_cols}
   feat_gap_cat = {F: [] for F in multicat_cols}
   feat_gap_sig = {F: [] for F in sensitive_cols}
@@ -524,6 +543,8 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
       for ec in error_cols:
         oh_gap[ec].append(np.nan)
         oh_gap_sig[ec].append(np.nan)
+        if oh_kind == 'multicat':
+          oh_gap_class[ec].append(np.nan)
       for F in sensitive_cols:
         feat_gap[F].append(np.nan)
         feat_gap_sig[F].append(np.nan)
@@ -534,8 +555,10 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
     silh.append(recap['silh'].mean())
     if onehot:
       for ec in error_cols:
-        oh_gap[ec].append(overview_gap(res_df[ec], labels, 'binary'))
-        oh_gap_sig[ec].append(extreme_pair_gap_p(res_df[ec], labels, 'binary'))
+        oh_gap[ec].append(overview_gap(res_df[ec], labels, oh_kind))
+        oh_gap_sig[ec].append(extreme_pair_gap_p(res_df[ec], labels, oh_kind))
+        if oh_kind == 'multicat':
+          oh_gap_class[ec].append(overview_gap_cat(res_df[ec], labels))
     else:
       error_gap.append(overview_gap(res_df[error_col], labels, error_kind))
       error_gap_sig.append(extreme_pair_gap_p(res_df[error_col], labels, error_kind))
@@ -557,10 +580,12 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
       'max_prop': max_prop,
   }
   if onehot:
-    # One [sep, gap, gap_sig] set per class; sep copied from chi_res.
+    # One [sep, gap, (gap_class), gap_sig] set per class; sep copied from chi_res.
     for ec in error_cols:
       all_quali[f'{ec}_sep'] = chi_res[f'{ec}_sep'].values
       all_quali[f'{ec}_gap'] = oh_gap[ec]
+      if oh_kind == 'multicat':
+        all_quali[f'{ec}_gap_class'] = oh_gap_class[ec]
       all_quali[f'{ec}_gap_sig'] = oh_gap_sig[ec]
   else:
     all_quali['error_sep'] = chi_res['error_sep'].values
@@ -584,7 +609,7 @@ def recap_quali_metrics(chi_res, results, exp_condition, sensitive_cols=None, or
 # src.experiments; the implementations live in result_viz to keep this module
 # focused on table building.
 from .result_viz import (  # noqa: E402,F401
-    classify_column, display_label, order_result_columns,
+    classify_column, order_result_columns,
     render_result_heatmap, plot_quality_heatmap, plot_cluster_recap_heatmap,
 )
 
@@ -605,7 +630,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             original_sensitive_cols=None,
                             continuous_sensitive_cols=None,
                             ohe_col_names=None, multiclass_option=None,
-                            error_cols=None):
+                            error_cols=None, error_cols_kind='binary'):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -716,7 +741,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                        error_label=error_label,
                        continuous_sensitive_cols=continuous_sensitive_cols,
                        multiclass_option=multiclass_option,
-                       error_cols=error_cols)
+                       error_cols=error_cols, error_cols_kind=error_cols_kind)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])

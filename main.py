@@ -26,7 +26,6 @@ from datetime import datetime
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_DATE = datetime.now().strftime('%Y-%m-%d')
 OUTPUT_DIR = os.path.join(PROJECT_DIR, "clustering_results", SESSION_DATE)
-DATA_DIR = "Data"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -224,12 +223,16 @@ def parse_args():
                         choices=["binary", "regression", "multiclass"],
                         help="Type of error column: 'binary' (classification 0/1), 'regression' (continuous), or 'multiclass' (3+ class predictions; the error column is derived from --y_true_col / --y_pred_col). Default: binary")
     parser.add_argument("--error_multiclass_option", type=str, default="per_class",
-                        choices=["accuracy", "per_class", "per_cell", "onehot"],
+                        choices=["accuracy", "per_class", "precision", "per_cell",
+                                 "binary_cells", "onehot", "classwise"],
                         help="How to derive the multi-class error column (only with --error_type multiclass): "
                              "'accuracy' (binary correct/incorrect), "
                              "'per_class' (default; true-class label of each error, 'correct' otherwise), "
+                             "'precision' (predicted-class label of each error, 'correct' otherwise), "
                              "'per_cell' (confusion cell 'true→pred' of each error, 'correct' otherwise), "
-                             "'onehot' (one binary error column per class).")
+                             "'binary_cells' (TP/TN/FP/FN confusion cell; 2-class problems), "
+                             "'onehot' (one binary one-vs-all error column per class), "
+                             "'classwise' (one TP/FN/FP/TN one-vs-all column per class).")
     parser.add_argument("--data_path", type=str, required=True,
                           help="Path to input CSV file")
     # Output
@@ -422,6 +425,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         ohe_col_names=ohe_col_names,
         multiclass_option=args.error_multiclass_option,
         error_cols=args.error_cols,
+        error_cols_kind=args.error_cols_kind,
     )
 
     # Print progress for each condition
@@ -439,7 +443,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                              error_label=error_label,
                              continuous_sensitive_cols=continuous_sensitive_cols,
                              multiclass_option=args.error_multiclass_option,
-                             error_cols=args.error_cols)
+                             error_cols=args.error_cols,
+                             error_cols_kind=args.error_cols_kind)
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 
@@ -465,7 +470,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                                     error_col=error_col,
                                     error_type=args.error_type,
                                     multiclass_option=args.error_multiclass_option,
-                             error_cols=args.error_cols)
+                             error_cols=args.error_cols,
+                             error_cols_kind=args.error_cols_kind)
 
     if not args.no_plots:
       # Separability test heatmap (omnibus p-values) — same blue/red/violet styling
@@ -699,18 +705,22 @@ def main():
             raise ValueError("--error_type regression requires either --error_col or both --y_true_col and --y_pred_col")
 
     # Multi-class error: derive a categorical/indicator error column from y_true/y_pred.
-    args.error_cols = None  # set for onehot (one binary error column per class)
+    # error_cols (+ error_cols_kind) is set for the per-class multi-column options
+    # (onehot = binary indicators, classwise = TP/FN/FP/TN multi-categorical).
+    args.error_cols = None
+    args.error_cols_kind = 'binary'
     if args.error_type == 'multiclass':
         if not (args.y_true_col and args.y_pred_col):
             raise ValueError("--error_type multiclass requires both --y_true_col and --y_pred_col")
         err_df = multiclass_error_types(df[args.y_true_col], df[args.y_pred_col],
                                         args.error_multiclass_option)
-        if args.error_multiclass_option == 'onehot':
-            # One binary error column per class -> one result-table set each. A
-            # single 'any error' indicator drives clustering's ERR group + scoring.
+        if args.error_multiclass_option in ('onehot', 'classwise'):
+            # One error column per class -> one result-table set each. A single
+            # 'any error' indicator drives clustering's ERR group + scoring.
             for col in err_df.columns:
                 df[col] = err_df[col].values
             args.error_cols = list(err_df.columns)
+            args.error_cols_kind = 'binary' if args.error_multiclass_option == 'onehot' else 'multicat'
             df['_multiclass_error'] = (df[args.y_true_col] != df[args.y_pred_col]).astype(int)
             args.error_col = '_multiclass_error'
         else:
@@ -983,7 +993,8 @@ def main():
                            original_sensitive_cols=original_sensitive_cols,
                            continuous_sensitive_cols=continuous_sensitive_cols,
                            multiclass_option=args.error_multiclass_option,
-                           error_cols=args.error_cols)
+                           error_cols=args.error_cols,
+                           error_cols_kind=args.error_cols_kind)
 
         # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")
