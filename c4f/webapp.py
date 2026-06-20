@@ -14,6 +14,7 @@ import sys
 import glob
 import tempfile
 import subprocess
+import pandas as pd
 
 # gradio imported lazily inside launch() so _build_cmd stays testable without it.
 
@@ -47,14 +48,29 @@ def _build_cmd(data_path, out_dir, regular, sensitive, error_type, error_col,
     return cmd
 
 
+def _cols(path):
+    """Header columns of an uploaded CSV (empty list if unreadable)."""
+    try:
+        return list(pd.read_csv(path, nrows=0).columns)
+    except Exception:
+        return []
+
+
+def _csv1(v):
+    """Coerce a dropdown value (list / str / None) to a comma string."""
+    if isinstance(v, (list, tuple)):
+        return ",".join(str(x) for x in v)
+    return v or ""
+
+
 def _run(file, regular, sensitive, error_type, error_col, y_true, y_pred,
          mc_option, algorithm, distance, n_clusters, seed, exclude):
     if file is None:
-        return "Upload a CSV first.", [], []
+        return "Upload a CSV first.", [], [], None
     out_dir = tempfile.mkdtemp(prefix="c4f_web_")
-    cmd = _build_cmd(file.name, out_dir, regular, sensitive, error_type, error_col,
-                     y_true, y_pred, mc_option, algorithm, distance, n_clusters,
-                     seed, exclude)
+    cmd = _build_cmd(file.name, out_dir, _csv1(regular), _csv1(sensitive), error_type,
+                     _csv1(error_col), _csv1(y_true), _csv1(y_pred), mc_option,
+                     algorithm, distance, n_clusters, seed, _csv1(exclude))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     log = (proc.stdout or "") + (proc.stderr or "")
     # run_batch_experiment writes into out_dir/<timestamp>_experiment_.../
@@ -62,7 +78,11 @@ def _run(file, regular, sensitive, error_type, error_col, y_true, y_pred,
     base = runs[-1] if runs else out_dir
     pngs = sorted(glob.glob(os.path.join(base, "*.png")))
     csvs = sorted(glob.glob(os.path.join(base, "*.csv")))
-    return log, pngs, csvs
+    summary = os.path.join(base, "results_summary.csv")
+    preview = pd.read_csv(summary) if os.path.exists(summary) else None
+    if not pngs and not csvs:
+        log += "\n\n(no outputs — check the log above; experiment mode needs R >= 4.5 + rpy2.)"
+    return log, pngs, csvs, preview
 
 
 def launch(**kwargs):
