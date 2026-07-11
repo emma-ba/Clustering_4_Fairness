@@ -278,14 +278,13 @@ def fisher_rxc_p(table):
     ro, fisher = _r_fisher_test()
     rmat = ro.r["matrix"](ro.IntVector(table.flatten(order="C")),
                           nrow=table.shape[0], byrow=True)
-    return round(float(fisher(rmat).rx2("p.value")[0]), 6)
+    return round(float(fisher(rmat, workspace=1000000000).rx2("p.value")[0]), 6)
 
 
-def omnibus_error_sep_p(values, labels, error_kind):
-    """Overview error 'sep.': one omnibus p across all clusters. Continuous error
-    -> one-way ANOVA; binary / multi-class error -> r x c Fisher exact (R via
-    rpy2) on the (error-value x cluster) contingency table. NaN on degenerate
-    input."""
+def error_sep_p(values, labels, error_kind):
+    """Overview error 'sep.': one p across all clusters. Continuous error ->
+    one-way ANOVA; binary / multi-class error -> chi-square on the (error-value x
+    cluster) contingency table. NaN on degenerate input."""
     df = pd.DataFrame({"v": pd.Series(values).values, "c": np.asarray(labels)})
     df = df[df["c"] != -1].dropna(subset=["v"])
     if df["c"].nunique() < 2:
@@ -298,7 +297,13 @@ def omnibus_error_sep_p(values, labels, error_kind):
             return round(float(stats.f_oneway(*groups).pvalue), 6)
         except (ValueError, FloatingPointError):
             return np.nan
-    return fisher_rxc_p(pd.crosstab(df["v"], df["c"]).values)
+    table = pd.crosstab(df["v"], df["c"])
+    if table.shape[0] < 2 or table.shape[1] < 2:
+        return np.nan
+    try:
+        return round(float(chi2_contingency(table).pvalue), 6)
+    except ValueError:
+        return np.nan
 
 
 def error_kind_for(error_type, multiclass_option=None):

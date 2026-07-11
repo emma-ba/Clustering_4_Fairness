@@ -72,6 +72,19 @@ deactivate
 
 See https://docs.conda.io/projects/conda/en/latest/user-guide/install/ for installation, then `pip install -r requirements.txt`.
 
+### Experiment mode — R + rpy2
+
+Experiment mode (`--experiment`) runs the error separability test with R's `fisher.test` via `rpy2`, so it needs **R ≥ 4.5** and `rpy2` installed (`pip install rpy2`). Single-run mode needs neither.
+
+On macOS the bundled R framework (often 4.3.x) is too old and `rpy2` picks it up by default, failing with `symbol 'R_getVar' not found`. Install a modern R (`brew install r`) and point `rpy2` at it before running:
+
+```bash
+export R_HOME="$(/usr/local/opt/r/bin/R RHOME)"   # Apple Silicon: /opt/homebrew/opt/r/bin/R
+export RPY2_CFFI_MODE=ABI
+```
+
+Add those two lines to `~/.zshrc` to make them permanent.
+
 ---
 
 ## Usage

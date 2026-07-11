@@ -20,7 +20,7 @@ from .fairness_metrics import (
     feature_kind, cluster_value, cluster_value_cat, overview_gap, overview_gap_cat,
     onevsall_gap, onevsall_gap_cat, onevsall_gap_p,
     omnibus_separability_p,
-    size_metrics, extreme_pair_gap_p, omnibus_error_sep_p,
+    size_metrics, extreme_pair_gap_p, error_sep_p,
     error_kind_for,
 )
 
@@ -430,9 +430,9 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 
     if onehot:
       for ec in error_cols:
-        chi_res[f'{ec}_sep'].append(omnibus_error_sep_p(res_df[ec], labels, 'binary'))
+        chi_res[f'{ec}_sep'].append(error_sep_p(res_df[ec], labels, 'binary'))
     else:
-      chi_res['error_sep'].append(omnibus_error_sep_p(res_df[error_col], labels, error_kind))
+      chi_res['error_sep'].append(error_sep_p(res_df[error_col], labels, error_kind))
     for F in sensitive_cols:
       kind = feature_kind(res_df[F], F in continuous_set)
       chi_res[f'{F}_sep'].append(omnibus_separability_p(res_df[F], labels, kind))

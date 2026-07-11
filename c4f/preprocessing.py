@@ -6,8 +6,9 @@ import numpy as np
 import pandas as pd
 
 
-def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
-                        distance='euclidean'):
+def encode_categoricals(
+    df, col_lists, categorical_cols_arg, algorithm, distance="euclidean"
+):
     """
     Encode categorical columns for clustering.
 
@@ -56,27 +57,31 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
     for col in all_cols_ordered:
         if col in df.columns:
             dtype = df[col].dtype
-            if dtype.kind in ('O', 'U', 'S') or dtype.name in ('category', 'string'):
+            if dtype.kind in ("O", "U", "S") or dtype.name in ("category", "string"):
                 categorical_col_names.add(col)
 
-    if algorithm == 'kprototypes':
+    if algorithm == "kprototypes":
         return df, col_lists, list(categorical_col_names), {}, []
 
-    if distance == 'gower':
+    if distance == "gower":
         df_encoded = df.copy()
         multiclass_dummies = {}
         for col in sorted(categorical_col_names):
             if col not in df_encoded.columns:
                 continue
             dtype = df_encoded[col].dtype
-            if not (dtype.kind in ('O', 'U', 'S') or dtype.name in ('category', 'string')):
+            if not (
+                dtype.kind in ("O", "U", "S") or dtype.name in ("category", "string")
+            ):
                 continue
             # Multi-class cols additionally get readable 0/1 dummies kept ALONGSIDE
             # the factorized original: the factorized code column stays in col_lists
             # for the Gower distance, the dummies feed the (readable) fairness
             # analysis (see _build_sensitive_analysis_list).
             if df_encoded[col].nunique(dropna=True) > 2:
-                dummies = pd.get_dummies(df_encoded[col], prefix=col, drop_first=False).astype('int8')
+                dummies = pd.get_dummies(
+                    df_encoded[col], prefix=col, drop_first=False
+                ).astype("int8")
                 collisions = (set(df_encoded.columns) - {col}) & set(dummies.columns)
                 if collisions:
                     raise ValueError(
@@ -90,7 +95,13 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
             codes = codes.astype(float)
             codes[codes < 0] = np.nan
             df_encoded[col] = codes
-        return df_encoded, col_lists, list(categorical_col_names), multiclass_dummies, []
+        return (
+            df_encoded,
+            col_lists,
+            list(categorical_col_names),
+            multiclass_dummies,
+            [],
+        )
 
     if not categorical_col_names:
         return df, col_lists, [], {}, []
@@ -115,9 +126,11 @@ def encode_categoricals(df, col_lists, categorical_cols_arg, algorithm,
 
         # Binary: drop_first=True gives a single 0/1 column.
         # Multi-class: drop_first=False keeps all K categories.
-        is_multiclass = (n_unique > 2)
+        is_multiclass = n_unique > 2
         drop_first = not is_multiclass
-        dummies = pd.get_dummies(df_encoded[col], prefix=col, drop_first=drop_first).astype('int8')
+        dummies = pd.get_dummies(
+            df_encoded[col], prefix=col, drop_first=drop_first
+        ).astype("int8")
         dummy_cols = list(dummies.columns)
         all_ohe_dummy_cols.extend(dummy_cols)
 

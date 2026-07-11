@@ -33,7 +33,7 @@ from .fairness_metrics import (
     size_metrics,
     extreme_pair_gap_p,
     omnibus_separability_p,
-    omnibus_error_sep_p,
+    error_sep_p,
     fisher_rxc_p,
 )
 from .experiments import (
@@ -71,7 +71,7 @@ __all__ = [
     "size_metrics",
     "extreme_pair_gap_p",
     "omnibus_separability_p",
-    "omnibus_error_sep_p",
+    "error_sep_p",
     "fisher_rxc_p",
     # experiments
     "make_recap",

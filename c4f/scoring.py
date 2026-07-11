@@ -16,6 +16,7 @@ from scipy.stats import chi2_contingency, kruskal
 
 ScoringFn = Callable[[np.ndarray, np.ndarray], float]
 
+
 def silhouette_scorer(X: np.ndarray, labels: np.ndarray) -> float:
     """Standard silhouette score. Handles raw features and precomputed distance matrices."""
     n_clusters = len(set(labels) - {-1})
@@ -25,8 +26,12 @@ def silhouette_scorer(X: np.ndarray, labels: np.ndarray) -> float:
     if non_noise.sum() <= n_clusters:
         return -1.0
     # Detect precomputed distance matrix: square, same size as labels, all non-negative
-    if (X.ndim == 2 and X.shape[0] == X.shape[1] and X.shape[0] == len(labels)
-            and (X >= 0).all()):
+    if (
+        X.ndim == 2
+        and X.shape[0] == X.shape[1]
+        and X.shape[0] == len(labels)
+        and (X >= 0).all()
+    ):
         X_sub = X[np.ix_(non_noise, non_noise)]
         return silhouette_score(X_sub, labels[non_noise], metric="precomputed")
     return silhouette_score(X[non_noise], labels[non_noise])
@@ -56,7 +61,11 @@ def make_chi2_error_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        err = data[non_noise] if len(data) == len(labels) else data[:len(labels)][non_noise]
+        err = (
+            data[non_noise]
+            if len(data) == len(labels)
+            else data[: len(labels)][non_noise]
+        )
         lab = labels[non_noise]
         # Build contingency: rows = [correct, error], cols = clusters
         unique_labels = sorted(set(lab))
@@ -101,7 +110,11 @@ def make_kruskal_error_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        err = data[non_noise] if len(data) == len(labels) else data[:len(labels)][non_noise]
+        err = (
+            data[non_noise]
+            if len(data) == len(labels)
+            else data[: len(labels)][non_noise]
+        )
         lab = labels[non_noise]
         unique_labels = sorted(set(lab))
         groups = [err[lab == cl] for cl in unique_labels]
@@ -145,7 +158,11 @@ def make_categorical_error_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        err = data[non_noise] if len(data) == len(labels) else data[:len(labels)][non_noise]
+        err = (
+            data[non_noise]
+            if len(data) == len(labels)
+            else data[: len(labels)][non_noise]
+        )
         lab = labels[non_noise]
         categories = sorted(set(err))
         unique_labels = sorted(set(lab))
@@ -190,7 +207,11 @@ def make_chi2_sensitive_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        sens = data[non_noise] if len(data) == len(labels) else data[:len(labels)][non_noise]
+        sens = (
+            data[non_noise]
+            if len(data) == len(labels)
+            else data[: len(labels)][non_noise]
+        )
         lab = labels[non_noise]
         unique_vals = sorted(set(sens))
         unique_labels = sorted(set(lab))
@@ -218,7 +239,7 @@ def make_composite_scorer(
     silhouette_weight: float = 0.3,
     error_weight: float = 0.5,
     fairness_weight: float = 0.2,
-    error_type: str = 'binary',
+    error_type: str = "binary",
 ) -> ScoringFn:
     """
     Factory: weighted combination of silhouette, error separation, and fairness.
@@ -262,9 +283,9 @@ def make_composite_scorer(
 
     error_scorer = None
     if error_data is not None:
-        if error_type == 'regression':
+        if error_type == "regression":
             error_scorer = make_kruskal_error_scorer(error_data, mask)
-        elif error_type == 'multiclass':
+        elif error_type == "multiclass":
             error_scorer = make_categorical_error_scorer(error_data, mask)
         else:
             error_scorer = make_chi2_error_scorer(error_data, mask)
