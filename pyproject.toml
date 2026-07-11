@@ -14,14 +14,21 @@ dependencies = [
     "matplotlib",
     "seaborn",
     "scikit-learn",
-    "scikit-learn-extra",
     "hdbscan",
     "kmodes",
 ]
 
+[project.optional-dependencies]
+# Experiment mode's omnibus error test uses R's fisher.test via rpy2 (needs R >= 4.5).
+experiment = ["rpy2"]
+web = ["gradio", "rpy2"]
+# scikit-learn-extra (KMedoids) has no numpy-2 wheels; only needed for --algorithm kmedoids.
+kmedoids = ["scikit-learn-extra"]
+
 [project.scripts]
 c4f = "c4f.main:main"
+c4f-web = "c4f.webapp:launch"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["c4f*", "src*"]
+include = ["c4f*"]
