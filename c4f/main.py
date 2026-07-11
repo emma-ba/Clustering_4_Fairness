@@ -80,11 +80,6 @@ def main():
     # 0/1 misclassification signal, since NaN would break the error scorers.
     args.error_analysis_col = None
     if args.error_type == "binary" and args.binary_error_metric != "raw":
-        if args.experiment is not None:
-            raise ValueError(
-                "--binary_error_metric is not yet supported in --experiment mode; "
-                "run a single clustering (omit --experiment)."
-            )
         if not (args.y_true_col and args.y_pred_col):
             raise ValueError(
                 f"--binary_error_metric {args.binary_error_metric} requires "

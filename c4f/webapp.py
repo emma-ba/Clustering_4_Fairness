@@ -114,6 +114,7 @@ def _build_cmd(
     proxy="",
     special="",
     error_label="",
+    binary_error_metric="raw",
     n_min="",
     n_max="",
     seeds="",
@@ -192,7 +193,12 @@ def _build_cmd(
     if error_label:
         cmd += ["--error_label", error_label]
     if error_type == "binary":
-        cmd += ["--error_col", error_col]
+        if binary_error_metric != "raw":
+            # FPR/FNR/... are derived per cluster from y_true/y_pred, not a fixed column.
+            cmd += ["--binary_error_metric", binary_error_metric,
+                    "--y_true_col", y_true, "--y_pred_col", y_pred]
+        else:
+            cmd += ["--error_col", error_col]
     elif error_type == "regression":
         if error_col:
             cmd += ["--error_col", error_col]
@@ -248,6 +254,7 @@ def _run(
     proxy,
     special,
     error_label,
+    binary_error_metric,
     n_min,
     n_max,
     seeds,
@@ -288,6 +295,7 @@ def _run(
         proxy=_csv1(proxy),
         special=_csv1(special),
         error_label=error_label or "",
+        binary_error_metric=binary_error_metric,
         n_min=n_min or "",
         n_max=n_max or "",
         seeds=seeds or "",
@@ -374,9 +382,15 @@ def _build():
             error_label = gr.Textbox(
                 label="Error display label (optional)", placeholder="e.g. FP Rate"
             )
+            binary_error_metric = gr.Dropdown(
+                ["raw", "fpr", "fnr", "precision", "prec_neg"], value="raw",
+                label="Binary error metric",
+                info="raw = use the error column; fpr/fnr/… are derived per cluster from "
+                "y_true / y_pred",
+            )
             with gr.Row():
-                y_true = gr.Dropdown(label="y_true column", visible=False)
-                y_pred = gr.Dropdown(label="y_pred column", visible=False)
+                y_true = gr.Dropdown(label="y_true column")
+                y_pred = gr.Dropdown(label="y_pred column")
             mc_option = gr.Dropdown(
                 MC_OPTS,
                 value="per_class",
@@ -487,17 +501,18 @@ def _build():
 
         file.change(_fill, inputs=file, outputs=_pickers)
 
-        # Show only the fields the chosen error type uses.
+        # Show only the fields the chosen error type uses. y_true/y_pred stay visible
+        # for binary too — the confusion-matrix rate metrics need them.
         def _toggle(t):
             return (
                 gr.update(visible=t in ("binary", "regression")),  # error_col
-                gr.update(visible=t in ("regression", "multiclass")),  # y_true
-                gr.update(visible=t in ("regression", "multiclass")),  # y_pred
-                gr.update(visible=t == "multiclass"),
-            )  # mc_option
+                gr.update(visible=t == "binary"),                  # binary_error_metric
+                gr.update(visible=t == "multiclass"),              # mc_option
+            )
 
         error_type.change(
-            _toggle, inputs=error_type, outputs=[error_col, y_true, y_pred, mc_option]
+            _toggle, inputs=error_type,
+            outputs=[error_col, binary_error_metric, mc_option],
         )
 
         # Show only the clustering params the chosen algorithm actually uses.
@@ -537,6 +552,7 @@ def _build():
                 proxy,
                 special,
                 error_label,
+                binary_error_metric,
                 n_min,
                 n_max,
                 seeds,

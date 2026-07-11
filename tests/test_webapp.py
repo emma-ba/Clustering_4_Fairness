@@ -107,3 +107,16 @@ def test_build_cmd_boolean_flags():
 
 def test_build_cmd_subset_none_omitted():
     assert "--subset" not in _base(subset="none")
+
+
+def test_build_cmd_binary_rate_uses_y_cols_and_metric():
+    c = _build_cmd("d.csv", "/out", "age", "race", "binary", "err", "yt", "yp", "per_class",
+                   "kmeans", "euclidean", 4, 42, "", binary_error_metric="fpr")
+    assert c[c.index("--binary_error_metric") + 1] == "fpr"
+    assert "--y_true_col" in c and "--y_pred_col" in c
+    assert "--error_col" not in c
+
+
+def test_build_cmd_binary_raw_still_uses_error_col():
+    c = _base()  # binary_error_metric defaults to 'raw'
+    assert "--error_col" in c and "--binary_error_metric" not in c

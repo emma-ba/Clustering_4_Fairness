@@ -54,6 +54,9 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     proxy_cols = parse_column_list(args.proxy_cols)
     special_cols = parse_column_list(args.special_cols)
     error_col = args.error_col
+    # Binary-error-rate mode (fpr/fnr/...) analyses a masked rate column in the recap +
+    # omnibus, while ERR clustering and scoring keep the raw 0/1 error_col.
+    error_analysis_col = getattr(args, 'error_analysis_col', None) or error_col
 
     unknown_continuous = continuous_sensitive_cols - set(sensitive_cols or [])
     if unknown_continuous:
@@ -186,7 +189,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         seed=args.seed,
         scoring_fn=scoring_fn,
         sensitive_cols=sensitive_cols_analysis,
-        error_col=error_col,
+        error_col=error_analysis_col,
         min_samples=args.min_samples,
         eps=args.eps,
         min_datapoints=args.min_datapoints,
@@ -215,7 +218,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
 
     # Generate chi-squared / Kruskal-Wallis test results
     chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols_analysis,
-                             error_type=args.error_type, error_col=error_col,
+                             error_type=args.error_type, error_col=error_analysis_col,
                              continuous_sensitive_cols=continuous_sensitive_cols,
                              multiclass_option=args.error_multiclass_option,
                              error_cols=args.error_cols,
