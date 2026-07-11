@@ -20,6 +20,76 @@ import pandas as pd
 # gradio imported lazily inside launch() so _build_cmd stays testable without it.
 
 
+HOME_MD = """
+# c4fairness — Clustering for Fairness
+
+**Discover where a model's errors fall unevenly.** `c4fairness` clusters the rows of a
+model's test set and reports how prediction-error disparities and sensitive-attribute
+composition vary across the discovered clusters — surfacing under-served subgroups
+*without* pre-specifying the protected group.
+
+**Motivation.** Aggregate accuracy hides localized harm: a model can look fair on average
+yet fail a specific intersection of groups. Unsupervised clustering of the test set exposes
+those pockets and quantifies the disparity with proper significance tests.
+
+**Made at Vrije Universiteit Amsterdam (VU), in collaboration with the University of
+Twente (UT).**
+
+<!-- Add further information here (authors, funding, links, citation). -->
+
+---
+
+Upload a CSV, choose your columns, and run. Results (heatmaps + tables) appear in the tabs
+below. See the **Documentation** tab for column roles and options.
+
+*Exact multi-categorical Fisher needs R ≥ 4.5 + `c4fairness[r]`; otherwise a scipy fallback
+is used automatically.*
+"""
+
+
+DOC_MD = """
+## Documentation
+
+### Workflow
+1. **Upload** a CSV where each row is one test-set example (features + the model's outputs).
+2. **Columns** — assign roles (below).
+3. **Error** — tell the app how to read the model's mistakes.
+4. **Clustering options** — algorithm + its parameters (only the relevant ones are shown).
+5. **Run** — heatmaps and tables appear in the tabs.
+
+### Column roles
+- **Regular features** — numeric/other features the clustering groups on.
+- **Sensitive features** — protected attributes to audit (binary or multi-categorical).
+- **Numeric sensitive features** — the subset of sensitive columns to analyse as
+  numbers (median), e.g. `age`. Leave a sensitive column out of here and it is treated as
+  categories.
+- **Proxy / Special features** — proxies for sensitive attributes, and extra columns
+  (e.g. SHAP values) to include.
+
+### Error types
+- **binary** — a 0/1 error column (or a confusion-matrix rate).
+- **regression** — a continuous target; error is the signed residual (median per cluster).
+- **multiclass** — pick `y_true` / `y_pred`; the *Multi-class error option* controls how the
+  error is typed (per-class, per-cell confusion, one-hot, …).
+
+### Multi-categorical options
+- **Sensitive display** — `onehot` (one column per category) or `salient` (winning category
+  + its value).
+- **Significance test** — `auto` uses exact r×c Fisher when R is available, else scipy
+  (chi-square with 0-cell handling, or one-vs-all 2×2 Fisher). `fisher_rxc` forces R;
+  `chi2` / `fisher_ova` force scipy.
+
+### Reading the heatmaps
+Blue = cluster size, red = error, violet = sensitive; darker = higher (for p-value columns,
+darker = more significant). A cluster with a high error gap and a significant `gap sig.` is
+where the model most misfires — read its sensitive columns to see which group it concentrates.
+
+### More
+Worked examples: `docs/example_binary.ipynb`, `docs/example_regression.ipynb`.
+Research directions & publishing plan: `docs/RESEARCH.md`.
+"""
+
+
 def _build_cmd(
     data_path,
     out_dir,
@@ -35,6 +105,15 @@ def _build_cmd(
     n_clusters,
     seed,
     exclude,
+    eps=0.5,
+    min_samples=5,
+    max_iter=300,
+    multicat_sig="auto",
+    multicat_table_option="onehot",
+    continuous_sensitive="",
+    proxy="",
+    special="",
+    error_label="",
 ):
     """Assemble the `c4f --experiment ...` argv from form inputs."""
     cmd = [sys.executable, "-m", "c4f.main", "--data_path", data_path, "--experiment"]
@@ -53,11 +132,30 @@ def _build_cmd(
         out_dir,
         "--error_type",
         error_type,
+        "--multicat_sig",
+        multicat_sig,
+        "--multicat_table_option",
+        multicat_table_option,
     ]
+    # Algorithm-specific parameters — only the flags the chosen algorithm actually uses.
+    if algorithm == "dbscan":
+        cmd += ["--eps", str(eps)]
+    if algorithm in ("dbscan", "hdbscan"):
+        cmd += ["--min_samples", str(int(min_samples))]
+    if algorithm in ("kmeans", "bisectingkmeans", "kmedoids"):
+        cmd += ["--max_iter", str(int(max_iter))]
     if regular:
         cmd += ["--regular_cols", regular]
     if sensitive:
         cmd += ["--sensitive_cols", sensitive]
+    if continuous_sensitive:
+        cmd += ["--continuous_sensitive_cols", continuous_sensitive]
+    if proxy:
+        cmd += ["--proxy_cols", proxy]
+    if special:
+        cmd += ["--special_cols", special]
+    if error_label:
+        cmd += ["--error_label", error_label]
     if error_type == "binary":
         cmd += ["--error_col", error_col]
     elif error_type == "regression":
@@ -106,6 +204,15 @@ def _run(
     n_clusters,
     seed,
     exclude,
+    eps,
+    min_samples,
+    max_iter,
+    multicat_table_option,
+    multicat_sig,
+    continuous_sensitive,
+    proxy,
+    special,
+    error_label,
 ):
     if file is None:
         return "Upload a CSV first.", [], [], None
@@ -125,6 +232,15 @@ def _run(
         n_clusters,
         seed,
         _csv1(exclude),
+        eps=eps,
+        min_samples=min_samples,
+        max_iter=max_iter,
+        multicat_sig=multicat_sig,
+        multicat_table_option=multicat_table_option,
+        continuous_sensitive=_csv1(continuous_sensitive),
+        proxy=_csv1(proxy),
+        special=_csv1(special),
+        error_label=error_label or "",
     )
     proc = subprocess.run(cmd, capture_output=True, text=True)
     log = (proc.stdout or "") + (proc.stderr or "")
@@ -154,13 +270,7 @@ def _build():
     ]
 
     with gr.Blocks(title="c4f — Clustering for Fairness") as demo:
-        gr.Markdown(
-            "# c4f — Clustering for Fairness\n"
-            "Upload a CSV, pick your columns, run the experiment. Results "
-            "(heatmaps + tables) appear below.\n\n"
-            "*Experiment mode needs R ≥ 4.5 + rpy2 on the host for the omnibus "
-            "error test.*"
-        )
+        gr.Markdown(HOME_MD)
         file = gr.File(label="1. Dataset CSV", file_types=[".csv"])
 
         with gr.Group():
@@ -176,6 +286,21 @@ def _build():
                     multiselect=True,
                     info="Protected attributes (binary or multi-class)",
                 )
+            with gr.Row():
+                continuous_sensitive = gr.Dropdown(
+                    label="Numeric sensitive features",
+                    multiselect=True,
+                    info="Subset of sensitive to analyse as numeric/median (e.g. age) — "
+                    "otherwise treated as categories",
+                )
+                proxy = gr.Dropdown(
+                    label="Proxy features", multiselect=True,
+                    info="Proxies for the sensitive attributes",
+                )
+                special = gr.Dropdown(
+                    label="Special features", multiselect=True,
+                    info="e.g. SHAP values",
+                )
 
         with gr.Group():
             gr.Markdown("### 3. Error")
@@ -186,6 +311,9 @@ def _build():
             )
             error_col = gr.Dropdown(
                 label="Error column", info="0/1 for binary, numeric for regression"
+            )
+            error_label = gr.Textbox(
+                label="Error display label (optional)", placeholder="e.g. FP Rate"
             )
             with gr.Row():
                 y_true = gr.Dropdown(label="y_true column", visible=False)
@@ -218,6 +346,27 @@ def _build():
                 )
                 n_clusters = gr.Number(value=4, label="n_clusters", precision=0)
                 seed = gr.Number(value=42, label="seed", precision=0)
+            with gr.Row():
+                # Algorithm-specific — only the ones the default (kmeans) uses start visible.
+                eps = gr.Number(value=0.5, label="eps (DBSCAN)", visible=False)
+                min_samples = gr.Number(
+                    value=5, label="min_samples (HDBSCAN/DBSCAN)", precision=0,
+                    visible=False,
+                )
+                max_iter = gr.Number(
+                    value=300, label="max_iter (KMeans family)", precision=0,
+                    visible=True,
+                )
+            with gr.Row():
+                multicat_table_option = gr.Dropdown(
+                    ["onehot", "salient"], value="onehot",
+                    label="Multi-categorical sensitive display",
+                )
+                multicat_sig = gr.Dropdown(
+                    ["auto", "fisher_rxc", "chi2", "fisher_ova"], value="auto",
+                    label="Multi-cat significance test",
+                    info="'auto'/'fisher_rxc' use R if installed; others are scipy-only",
+                )
             exclude = gr.Textbox(
                 label="Exclude groups from conditions", placeholder="e.g. SPECIAL,ERR"
             )
@@ -232,15 +381,18 @@ def _build():
             files = gr.File(label="All CSV outputs", file_count="multiple")
         with gr.Tab("Log"):
             log = gr.Textbox(label="Run log", lines=18)
+        with gr.Tab("Documentation"):
+            gr.Markdown(DOC_MD)
 
         # Populate every column picker from the uploaded CSV header.
+        _pickers = [regular, sensitive, continuous_sensitive, proxy, special,
+                    error_col, y_true, y_pred]
+
         def _fill(f):
             cols = _cols(f.name) if f else []
-            return [gr.update(choices=cols) for _ in range(5)]
+            return [gr.update(choices=cols) for _ in range(len(_pickers))]
 
-        file.change(
-            _fill, inputs=file, outputs=[regular, sensitive, error_col, y_true, y_pred]
-        )
+        file.change(_fill, inputs=file, outputs=_pickers)
 
         # Show only the fields the chosen error type uses.
         def _toggle(t):
@@ -253,6 +405,18 @@ def _build():
 
         error_type.change(
             _toggle, inputs=error_type, outputs=[error_col, y_true, y_pred, mc_option]
+        )
+
+        # Show only the clustering params the chosen algorithm actually uses.
+        def _algo_fields(a):
+            return (
+                gr.update(visible=a == "dbscan"),                          # eps
+                gr.update(visible=a in ("dbscan", "hdbscan")),             # min_samples
+                gr.update(visible=a in ("kmeans", "bisectingkmeans", "kmedoids")),  # max_iter
+            )
+
+        algorithm.change(
+            _algo_fields, inputs=algorithm, outputs=[eps, min_samples, max_iter]
         )
 
         run_btn.click(
@@ -271,6 +435,15 @@ def _build():
                 n_clusters,
                 seed,
                 exclude,
+                eps,
+                min_samples,
+                max_iter,
+                multicat_table_option,
+                multicat_sig,
+                continuous_sensitive,
+                proxy,
+                special,
+                error_label,
             ],
             outputs=[log, gallery, files, preview],
         )
