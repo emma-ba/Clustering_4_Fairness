@@ -63,3 +63,47 @@ def test_build_cmd_omits_empty_column_roles():
                    "kmeans", "euclidean", 4, 42, "")
     assert "--continuous_sensitive_cols" not in c and "--proxy_cols" not in c
     assert "--special_cols" not in c and "--error_label" not in c
+
+
+def _base(**kw):
+    return _build_cmd("d.csv", "/out", "age", "race", "binary", "err", "", "", "per_class",
+                      "kmeans", "euclidean", 4, 42, "", **kw)
+
+
+def test_build_cmd_fixed_k_by_default():
+    c = _base()
+    assert "--n_clusters" in c and "--n_min" not in c and "--n_max" not in c
+
+
+def test_build_cmd_k_search_replaces_fixed_k():
+    c = _base(n_min=2, n_max=8)
+    assert c[c.index("--n_min") + 1] == "2" and c[c.index("--n_max") + 1] == "8"
+    assert "--n_clusters" not in c
+
+
+def test_build_cmd_scoring_and_weights():
+    c = _base(scoring="chi2_error", composite_weights="silhouette:0.2,error:0.6,fairness:0.2",
+              feature_weights="sensitive:2.0", min_datapoints=25)
+    assert c[c.index("--scoring") + 1] == "chi2_error"
+    assert c[c.index("--composite_weights") + 1] == "silhouette:0.2,error:0.6,fairness:0.2"
+    assert c[c.index("--feature_weights") + 1] == "sensitive:2.0"
+    assert c[c.index("--min_datapoints") + 1] == "25"
+
+
+def test_build_cmd_subset_seeds_projection_categorical():
+    c = _base(subset="FP", seeds="1,2,3", projection="pca,tsne", categorical_cols="region")
+    assert c[c.index("--subset") + 1] == "FP"
+    assert c[c.index("--seeds") + 1] == "1,2,3"
+    assert c[c.index("--projection") + 1] == "pca,tsne"
+    assert c[c.index("--categorical_cols") + 1] == "region"
+
+
+def test_build_cmd_boolean_flags():
+    c = _base(separability_check=True, no_standardize=True)
+    assert "--separability_check" in c and "--no_standardize" in c
+    c2 = _base(separability_check=False, no_standardize=False)
+    assert "--separability_check" not in c2 and "--no_standardize" not in c2
+
+
+def test_build_cmd_subset_none_omitted():
+    assert "--subset" not in _base(subset="none")

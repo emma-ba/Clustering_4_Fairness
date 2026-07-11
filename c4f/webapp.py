@@ -114,6 +114,18 @@ def _build_cmd(
     proxy="",
     special="",
     error_label="",
+    n_min="",
+    n_max="",
+    seeds="",
+    scoring="composite",
+    composite_weights="",
+    feature_weights="",
+    min_datapoints="",
+    subset="none",
+    separability_check=False,
+    categorical_cols="",
+    no_standardize=False,
+    projection="tsne",
 ):
     """Assemble the `c4f --experiment ...` argv from form inputs."""
     cmd = [sys.executable, "-m", "c4f.main", "--data_path", data_path, "--experiment"]
@@ -124,19 +136,26 @@ def _build_cmd(
         algorithm,
         "--distance",
         distance,
-        "--n_clusters",
-        str(int(n_clusters)),
         "--seed",
         str(int(seed)),
         "--output_dir",
         out_dir,
         "--error_type",
         error_type,
+        "--scoring",
+        scoring,
         "--multicat_sig",
         multicat_sig,
         "--multicat_table_option",
         multicat_table_option,
+        "--projection",
+        projection,
     ]
+    # Cluster count: a range (n_min/n_max) triggers a k-search; otherwise fixed k.
+    if n_min and n_max:
+        cmd += ["--n_min", str(int(n_min)), "--n_max", str(int(n_max))]
+    else:
+        cmd += ["--n_clusters", str(int(n_clusters))]
     # Algorithm-specific parameters — only the flags the chosen algorithm actually uses.
     if algorithm == "dbscan":
         cmd += ["--eps", str(eps)]
@@ -144,6 +163,22 @@ def _build_cmd(
         cmd += ["--min_samples", str(int(min_samples))]
     if algorithm in ("kmeans", "bisectingkmeans", "kmedoids"):
         cmd += ["--max_iter", str(int(max_iter))]
+    if seeds:
+        cmd += ["--seeds", seeds]
+    if composite_weights:
+        cmd += ["--composite_weights", composite_weights]
+    if feature_weights:
+        cmd += ["--feature_weights", feature_weights]
+    if min_datapoints not in ("", None):
+        cmd += ["--min_datapoints", str(int(min_datapoints))]
+    if subset and subset != "none":
+        cmd += ["--subset", subset]
+    if categorical_cols:
+        cmd += ["--categorical_cols", categorical_cols]
+    if separability_check:
+        cmd += ["--separability_check"]
+    if no_standardize:
+        cmd += ["--no_standardize"]
     if regular:
         cmd += ["--regular_cols", regular]
     if sensitive:
@@ -213,6 +248,18 @@ def _run(
     proxy,
     special,
     error_label,
+    n_min,
+    n_max,
+    seeds,
+    scoring,
+    composite_weights,
+    feature_weights,
+    min_datapoints,
+    subset,
+    separability_check,
+    categorical_cols,
+    no_standardize,
+    projection,
 ):
     if file is None:
         return "Upload a CSV first.", [], [], None
@@ -241,6 +288,18 @@ def _run(
         proxy=_csv1(proxy),
         special=_csv1(special),
         error_label=error_label or "",
+        n_min=n_min or "",
+        n_max=n_max or "",
+        seeds=seeds or "",
+        scoring=scoring,
+        composite_weights=composite_weights or "",
+        feature_weights=feature_weights or "",
+        min_datapoints=(int(min_datapoints) if min_datapoints else ""),
+        subset=subset,
+        separability_check=bool(separability_check),
+        categorical_cols=_csv1(categorical_cols),
+        no_standardize=bool(no_standardize),
+        projection=(projection or "tsne"),
     )
     proc = subprocess.run(cmd, capture_output=True, text=True)
     log = (proc.stdout or "") + (proc.stderr or "")
@@ -371,6 +430,40 @@ def _build():
                 label="Exclude groups from conditions", placeholder="e.g. SPECIAL,ERR"
             )
 
+        with gr.Accordion("5. Advanced options", open=False):
+            with gr.Row():
+                n_min = gr.Number(value=0, label="n_min (0 = fixed k)", precision=0,
+                                  info="Search cluster count over [n_min, n_max] instead of fixed k")
+                n_max = gr.Number(value=0, label="n_max (0 = fixed k)", precision=0)
+                seeds = gr.Textbox(label="Seeds (multi-run)", placeholder="e.g. 1,2,3")
+            with gr.Row():
+                scoring = gr.Dropdown(
+                    ["composite", "silhouette", "chi2_error", "chi2_sensitive"],
+                    value="composite", label="Scoring (k-selection objective)",
+                )
+                composite_weights = gr.Textbox(
+                    label="Composite weights",
+                    placeholder="silhouette:0.3,error:0.5,fairness:0.2",
+                )
+                feature_weights = gr.Textbox(
+                    label="Feature weights", placeholder="sensitive:2.0  or  age:1.5",
+                )
+            with gr.Row():
+                subset = gr.Dropdown(
+                    ["none", "TP", "TN", "FP", "FN", "TP_TN", "FP_FN"], value="none",
+                    label="Confusion-matrix subset",
+                )
+                min_datapoints = gr.Number(value=0, label="min_datapoints (0 = off)", precision=0)
+                projection = gr.Textbox(value="tsne", label="Projection(s)",
+                                        placeholder="pca,tsne  or  none")
+            with gr.Row():
+                categorical_cols = gr.Dropdown(
+                    label="Force categorical", multiselect=True,
+                    info="Columns to treat as categorical",
+                )
+                separability_check = gr.Checkbox(label="Separability check", value=False)
+                no_standardize = gr.Checkbox(label="Skip StandardScaler", value=False)
+
         run_btn = gr.Button("▶ Run experiment", variant="primary", size="lg")
 
         with gr.Tab("Heatmaps"):
@@ -386,7 +479,7 @@ def _build():
 
         # Populate every column picker from the uploaded CSV header.
         _pickers = [regular, sensitive, continuous_sensitive, proxy, special,
-                    error_col, y_true, y_pred]
+                    categorical_cols, error_col, y_true, y_pred]
 
         def _fill(f):
             cols = _cols(f.name) if f else []
@@ -444,6 +537,18 @@ def _build():
                 proxy,
                 special,
                 error_label,
+                n_min,
+                n_max,
+                seeds,
+                scoring,
+                composite_weights,
+                feature_weights,
+                min_datapoints,
+                subset,
+                separability_check,
+                categorical_cols,
+                no_standardize,
+                projection,
             ],
             outputs=[log, gallery, files, preview],
         )
