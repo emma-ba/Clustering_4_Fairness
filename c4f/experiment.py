@@ -54,8 +54,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     proxy_cols = parse_column_list(args.proxy_cols)
     special_cols = parse_column_list(args.special_cols)
     error_col = args.error_col
-    # Binary-error-rate mode (fpr/fnr/...) analyses a masked rate column in the recap +
-    # omnibus, while ERR clustering and scoring keep the raw 0/1 error_col.
+    # Binary-rate mode: recap/omnibus read the masked rate column; ERR + scoring keep raw.
     error_analysis_col = getattr(args, 'error_analysis_col', None) or error_col
 
     unknown_continuous = continuous_sensitive_cols - set(sensitive_cols or [])
@@ -107,9 +106,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         groups['REG'] = regular_cols
     if sensitive_cols:
         groups['SEN'] = sensitive_cols
-    # ERR clustering feature is a numeric 0/1 misclassification indicator (multi-class
-    # per_class/per_cell error columns are categorical labels that can't be scaled).
-    # error_col itself still drives scoring + the result tables.
+    # ERR clusters on a numeric 0/1 indicator (categorical per_class/per_cell error
+    # columns can't be scaled); error_col still drives scoring + tables.
     groups['ERR'] = [getattr(args, 'error_cluster_col', None) or error_col]
     if proxy_cols:
         groups['PROXY'] = proxy_cols

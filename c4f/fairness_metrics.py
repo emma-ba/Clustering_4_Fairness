@@ -89,20 +89,16 @@ def cluster_value_cat(values, kind):
 
 
 def binary_error_rate_column(y_true, y_pred, metric, pos=None):
-    """Per-row {1, 0, NaN} indicator whose *mean over a set of rows* is a confusion-
-    matrix error rate. NaN marks rows outside the rate's denominator, so every existing
-    binary metric (cluster_value's dropna().mean(), the Fisher 2x2 in extreme_pair_gap_p,
-    the chi2 in error_sep_p) reads the conditional rate — and its matching conditional
-    significance test — with no new statistics.
+    """Per-row {1, 0, NaN} indicator whose mean over a set of rows is a confusion-matrix
+    error rate; NaN excludes rows outside the rate's denominator, so the existing binary
+    metrics (dropna mean, Fisher 2x2, chi2) read the conditional rate unchanged.
 
       'fpr'       FP/(FP+TN)   denominator = actual negatives
       'fnr'       FN/(FN+TP)   denominator = actual positives
       'precision' FP/(FP+TP)   denominator = predicted positives  (= 1 - Precision)
       'prec_neg'  FN/(FN+TN)   denominator = predicted negatives   (= 1 - Precision for Negative)
 
-    `pos` is the positive label; defaults to the max observed label, matching the
-    max-is-positive convention used elsewhere in this module (cluster_value,
-    extreme_pair_gap_p)."""
+    `pos` is the positive label; defaults to the max observed label."""
     yt = pd.Series(y_true).reset_index(drop=True)
     yp = pd.Series(y_pred).reset_index(drop=True)
     if pos is None:
@@ -121,7 +117,7 @@ def binary_error_rate_column(y_true, y_pred, metric, pos=None):
             f"unknown binary_error_metric '{metric}'; use fpr, fnr, precision, or prec_neg"
         )
     col = pd.Series(np.where(err, 1.0, 0.0), index=yt.index)
-    col[~keep] = np.nan  # rows outside the denominator do not count toward the rate
+    col[~keep] = np.nan
     return col
 
 

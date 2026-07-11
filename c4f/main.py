@@ -74,10 +74,8 @@ def main():
                 "--error_type regression requires either --error_col or both --y_true_col and --y_pred_col"
             )
 
-    # Binary error rate (FPR/FNR/Precision/Prec-neg): derive a per-row {1,0,NaN} column
-    # whose per-cluster mean is the chosen confusion-matrix rate (NaN = rows outside that
-    # rate's denominator). Only the recap tables read it; clustering/scoring keep a plain
-    # 0/1 misclassification signal, since NaN would break the error scorers.
+    # Binary error rate (fpr/fnr/precision/prec_neg): a masked {1,0,NaN} column whose
+    # per-cluster mean is the rate. Recap-only; clustering/scoring keep the raw 0/1 signal.
     args.error_analysis_col = None
     if args.error_type == "binary" and args.binary_error_metric != "raw":
         if not (args.y_true_col and args.y_pred_col):
@@ -117,11 +115,9 @@ def main():
         err_df = multiclass_error_types(
             df[args.y_true_col], df[args.y_pred_col], args.error_multiclass_option
         )
-        # A 0/1 misclassification indicator is the ERR clustering feature: the
-        # per_class / per_cell error columns are categorical labels ('correct', '0->1')
-        # that cannot be scaled/clustered. The derived error column below drives scoring
-        # and the result tables. error_cluster_col is what experiment mode's ERR group
-        # clusters on (single-run clusters on the feature columns, not the error).
+        # ERR clustering needs a numeric feature: per_class/per_cell error columns are
+        # categorical labels. error_cluster_col (0/1) is the ERR group; the derived
+        # error_col drives scoring + the result tables.
         df["_multiclass_error_ind"] = (
             df[args.y_true_col] != df[args.y_pred_col]
         ).astype(int)
@@ -459,8 +455,8 @@ def main():
         if result.mask is not None:
             res_df = res_df[result.mask].copy()
         res_df["clusters"] = result.labels
-        # 'salient': rebuild readable multi-categorical columns into the recap frame
-        # (post-clustering, so Gower's code column used for clustering is untouched).
+        # 'salient': rebuild readable multicat columns post-clustering (Gower's code
+        # column, used for clustering, stays untouched).
         if args.multicat_table_option == "salient":
             apply_salient_reconstruction(
                 res_df, multiclass_dummies, original_sensitive_cols

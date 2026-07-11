@@ -229,9 +229,8 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         error_gap.append(round(onevsall_gap(c_err, rest_err, 'multicat'), 4))
         error_gap_cat_acc.append(onevsall_gap_cat(c_err, rest_err))
       else:
-        # binary error rate: one-vs-all gap over the non-NaN denominator. A masked
-        # rate column marks rows outside the rate's denominator with NaN; onevsall_gap
-        # drops them. Equals the old n_error/count shortcut for a plain 0/1 column.
+        # binary: one-vs-all gap over the non-NaN denominator (drops masked rows;
+        # == the old n_error/count shortcut for a plain 0/1 column).
         error_gap.append(onevsall_gap(c_data[error_col], rest_data[error_col], 'binary'))
       error_gap_sig.append(onevsall_gap_p(c_data[error_col], rest_data[error_col], error_kind))
 
@@ -729,8 +728,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
     else:
       res_df['clusters'] = result.labels
 
-    # 'salient': rebuild readable multi-categorical sensitive columns into this recap
-    # frame before make_recap / make_chi_tests read them (res_df is stored in results).
+    # 'salient': rebuild readable multicat columns before make_recap/make_chi_tests read them.
     if multicat_table_option == 'salient' and multiclass_dummies:
       apply_salient_reconstruction(res_df, multiclass_dummies, original_sensitive_cols or [])
 
