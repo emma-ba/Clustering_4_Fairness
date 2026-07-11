@@ -19,8 +19,9 @@ Intended behaviour:
 import numpy as np
 import pandas as pd
 
-from main import _encode_multiclass_categoricals, _build_sensitive_analysis_list
-from src.clustering import cluster
+from c4f.preprocessing import encode_categoricals
+from c4f.cli import _build_sensitive_analysis_list
+from c4f.clustering import cluster
 
 REGIONS = [
     "East Anglian Region", "Scotland", "London Region", "South Region",
@@ -40,7 +41,7 @@ def _df(n=200, seed=0):
 def test_euclidean_includes_multiclass_sensitive_dummies_in_feature_matrix():
     col_lists = {"regular": ["studied_credits"], "sensitive": ["region", "gender"],
                  "proxy": [], "special": []}
-    dfe, cl, catnames, mcd, ohe = _encode_multiclass_categoricals(
+    dfe, cl, catnames, mcd, ohe = encode_categoricals(
         _df(), col_lists, ["region"], "kmeans", distance="euclidean"
     )
     region_dummies = mcd["region"]
@@ -57,7 +58,7 @@ def test_euclidean_includes_multiclass_sensitive_dummies_in_feature_matrix():
 def test_euclidean_includes_multiclass_proxy_dummies_in_feature_matrix():
     col_lists = {"regular": ["studied_credits"], "sensitive": ["gender"],
                  "proxy": ["region"], "special": []}
-    dfe, cl, catnames, mcd, ohe = _encode_multiclass_categoricals(
+    dfe, cl, catnames, mcd, ohe = encode_categoricals(
         _df(), col_lists, ["region"], "kmeans", distance="euclidean"
     )
     for d in mcd["region"]:
@@ -73,7 +74,7 @@ def test_euclidean_includes_multiclass_proxy_dummies_in_feature_matrix():
 def test_analysis_list_dedup_under_euclidean():
     col_lists = {"regular": [], "sensitive": ["region", "gender"],
                  "proxy": [], "special": []}
-    dfe, cl, catnames, mcd, ohe = _encode_multiclass_categoricals(
+    dfe, cl, catnames, mcd, ohe = encode_categoricals(
         _df(), col_lists, ["region"], "kmeans", distance="euclidean"
     )
     analysis = _build_sensitive_analysis_list(cl["sensitive"], mcd, ["region", "gender"])
@@ -103,7 +104,7 @@ def test_cluster_on_all_ohe_features_does_not_crash():
 def test_analysis_list_gower_drops_factorized_original():
     col_lists = {"regular": [], "sensitive": ["region", "gender"],
                  "proxy": [], "special": []}
-    dfe, cl, catnames, mcd, ohe = _encode_multiclass_categoricals(
+    dfe, cl, catnames, mcd, ohe = encode_categoricals(
         _df(), col_lists, ["region"], "kmedoids", distance="gower"
     )
     # Gower keeps the factorized original in the feature matrix...
