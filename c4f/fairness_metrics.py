@@ -2,10 +2,11 @@
 Fairness metrics for clustering analysis.
 """
 
+import warnings
 import numpy as np
 import pandas as pd
 from scipy import stats
-from scipy.stats import mannwhitneyu, chi2_contingency
+from scipy.stats import mannwhitneyu, chi2_contingency, false_discovery_control
 
 
 def size_metrics(labels):
@@ -85,6 +86,43 @@ def cluster_value_cat(values, kind):
     if len(s) == 0:
         return np.nan
     return s.mode().iloc[0]
+
+
+def binary_error_rate_column(y_true, y_pred, metric, pos=None):
+    """Per-row {1, 0, NaN} indicator whose *mean over a set of rows* is a confusion-
+    matrix error rate. NaN marks rows outside the rate's denominator, so every existing
+    binary metric (cluster_value's dropna().mean(), the Fisher 2x2 in extreme_pair_gap_p,
+    the chi2 in error_sep_p) reads the conditional rate — and its matching conditional
+    significance test — with no new statistics.
+
+      'fpr'       FP/(FP+TN)   denominator = actual negatives
+      'fnr'       FN/(FN+TP)   denominator = actual positives
+      'precision' FP/(FP+TP)   denominator = predicted positives  (= 1 - Precision)
+      'prec_neg'  FN/(FN+TN)   denominator = predicted negatives   (= 1 - Precision for Negative)
+
+    `pos` is the positive label; defaults to the max observed label, matching the
+    max-is-positive convention used elsewhere in this module (cluster_value,
+    extreme_pair_gap_p)."""
+    yt = pd.Series(y_true).reset_index(drop=True)
+    yp = pd.Series(y_pred).reset_index(drop=True)
+    if pos is None:
+        pos = pd.concat([yt, yp]).max()
+    true_pos, pred_pos = yt == pos, yp == pos
+    if metric == "fpr":
+        keep, err = ~true_pos, pred_pos      # actual negatives; error = FP
+    elif metric == "fnr":
+        keep, err = true_pos, ~pred_pos      # actual positives; error = FN
+    elif metric == "precision":
+        keep, err = pred_pos, ~true_pos      # predicted positives; error = FP
+    elif metric == "prec_neg":
+        keep, err = ~pred_pos, true_pos      # predicted negatives; error = FN
+    else:
+        raise ValueError(
+            f"unknown binary_error_metric '{metric}'; use fpr, fnr, precision, or prec_neg"
+        )
+    col = pd.Series(np.where(err, 1.0, 0.0), index=yt.index)
+    col[~keep] = np.nan  # rows outside the denominator do not count toward the rate
+    return col
 
 
 def _props_per_cluster(df, cat):
@@ -229,35 +267,18 @@ def onevsall_gap_cat(cluster_vals, rest_vals):
     return best_cat
 
 
-def omnibus_separability_p(values, labels, kind):
-    """Overview *_sep: one omnibus p across all clusters. Categorical -> chi2
-    on (categories x clusters); numeric -> one-way ANOVA (per spec). NaN on
-    degenerate input (preserves current 'don't crash' behavior; 0-cell policy
-    deferred)."""
-    df = pd.DataFrame({"v": pd.Series(values).values, "c": np.asarray(labels)})
-    df = df[df["c"] != -1].dropna(subset=["v"])
-    if df["c"].nunique() < 2:
-        return np.nan
+def omnibus_separability_p(values, labels, kind, sig="auto"):
+    """Overview *_sep: one omnibus p across all clusters. Numeric -> one-way ANOVA;
+    categorical -> separability via `sig` (see _categorical_sep_p). NaN on degenerate
+    input."""
     if kind == "numeric":
-        groups = [g["v"].values for _, g in df.groupby("c") if len(g) > 0]
-        if len(groups) < 2:
-            return np.nan
-        try:
-            return round(float(stats.f_oneway(*groups).pvalue), 6)
-        except (ValueError, FloatingPointError):
-            return np.nan
-    table = pd.crosstab(df["v"], df["c"])
-    if table.shape[0] < 2 or table.shape[1] < 2:
-        return np.nan
-    try:
-        return round(float(chi2_contingency(table).pvalue), 6)
-    except ValueError:
-        return np.nan
+        return _anova_sep_p(values, labels)
+    return _categorical_sep_p(values, labels, sig)
 
 
 # R's fisher.test (via rpy2) handles r x c tables, which scipy's fisher_exact
-# (2x2 only) cannot. rpy2 is a required dependency; the import is lazy so the rest
-# of this module stays importable when only the non-Fisher paths are exercised.
+# (2x2 only) cannot. rpy2 is an OPTIONAL dependency ('c4fairness[r]'): the import is
+# lazy and gated by _has_r(), so scipy-only installs stay fully functional.
 _R_FISHER = None
 
 
@@ -281,29 +302,153 @@ def fisher_rxc_p(table):
     return round(float(fisher(rmat, workspace=1000000000).rx2("p.value")[0]), 6)
 
 
-def error_sep_p(values, labels, error_kind):
-    """Overview error 'sep.': one p across all clusters. Continuous error ->
-    one-way ANOVA; binary / multi-class error -> chi-square on the (error-value x
-    cluster) contingency table. NaN on degenerate input."""
+_HAS_R = None
+
+
+def _has_r():
+    """Cached probe: True if rpy2 + a working R are importable. Never raises, so a
+    missing R degrades to the scipy significance paths instead of crashing a run."""
+    global _HAS_R
+    if _HAS_R is None:
+        try:
+            import rpy2.robjects as ro
+            ro.r  # force R to initialize
+            _HAS_R = True
+        except Exception:
+            _HAS_R = False
+    return _HAS_R
+
+
+_WARNED_NO_R = False
+
+
+def _warn_no_r_once():
+    global _WARNED_NO_R
+    if not _WARNED_NO_R:
+        _WARNED_NO_R = True
+        warnings.warn(
+            "R not found: multi-categorical significance uses scipy (chi-square / "
+            "one-vs-all Fisher), which is approximate on sparse tables. Install "
+            "'c4fairness[r]' + R >= 4.5 for the exact r x c Fisher test.",
+            RuntimeWarning, stacklevel=2,
+        )
+
+
+def _cells_adequate(t):
+    """Chi-square's rule of thumb: reliable when every expected cell count >= 5."""
+    t = np.asarray(t, dtype=float)
+    total = t.sum()
+    if total <= 0:
+        return False
+    expected = np.outer(t.sum(axis=1), t.sum(axis=0)) / total
+    return bool((expected >= 5).all())
+
+
+def _chi2_with_zerocell(table):
+    """Chi-square p for a categorical contingency table. Absent categories/clusters
+    (all-zero rows/cols) are dropped; if any remaining cell is 0, Haldane's +0.5 is
+    added to every cell so the statistic stays finite (approximate p) rather than
+    NaN. NaN below 2x2 or on non-recoverable input."""
+    t = np.asarray(table, dtype=float)
+    t = t[t.sum(axis=1) > 0]
+    t = t[:, t.sum(axis=0) > 0]
+    if t.shape[0] < 2 or t.shape[1] < 2:
+        return np.nan
+    if (t == 0).any():
+        t = t + 0.5
+    try:
+        return round(float(chi2_contingency(t).pvalue), 6)
+    except (ValueError, FloatingPointError):
+        return np.nan
+
+
+def _ova_fisher_fdr(table):
+    """One omnibus p via one-vs-all 2x2 Fisher: for every (category i, cluster j)
+    cell, test [category i vs rest] x [cluster j vs rest]; Benjamini-Hochberg correct
+    all p-values and return the minimum. Exact per cell, so reliable on sparse tables
+    where chi-square is not. NaN below 2x2."""
+    t = np.asarray(table)
+    if t.ndim != 2 or t.shape[0] < 2 or t.shape[1] < 2:
+        return np.nan
+    total = int(t.sum())
+    row_tot = t.sum(axis=1)
+    col_tot = t.sum(axis=0)
+    ps = []
+    for i in range(t.shape[0]):
+        for j in range(t.shape[1]):
+            a = int(t[i, j])
+            b = int(row_tot[i]) - a       # category i, other clusters
+            c = int(col_tot[j]) - a       # other categories, cluster j
+            d = total - a - b - c
+            try:
+                ps.append(float(stats.fisher_exact([[a, b], [c, d]])[1]))
+            except ValueError:
+                continue
+    ps = np.asarray([p for p in ps if not np.isnan(p)], dtype=float)
+    if len(ps) == 0:
+        return np.nan
+    return round(float(np.min(false_discovery_control(ps, method="bh"))), 6)
+
+
+def _categorical_sep_p(values, labels, sig="auto"):
+    """One omnibus separability p for a (value x cluster) categorical table, per `sig`:
+      'fisher_rxc'  exact r x c Fisher-Freeman-Halton via R (raises if R absent)
+      'chi2'        scipy chi-square with Haldane 0-cell handling
+      'fisher_ova'  one-vs-all 2x2 Fisher over every (category, cluster) cell + BH FDR
+      'auto'        exact R r x c when available, else scipy: chi-square if cell counts
+                    are adequate (all expected >= 5), otherwise one-vs-all Fisher (exact
+                    on sparse tables). Warns once when R is unavailable.
+    NaN on a table smaller than 2x2."""
     df = pd.DataFrame({"v": pd.Series(values).values, "c": np.asarray(labels)})
     df = df[df["c"] != -1].dropna(subset=["v"])
     if df["c"].nunique() < 2:
         return np.nan
-    if error_kind == "numeric":
-        groups = [g["v"].values for _, g in df.groupby("c") if len(g) > 0]
-        if len(groups) < 2:
-            return np.nan
-        try:
-            return round(float(stats.f_oneway(*groups).pvalue), 6)
-        except (ValueError, FloatingPointError):
-            return np.nan
     table = pd.crosstab(df["v"], df["c"])
     if table.shape[0] < 2 or table.shape[1] < 2:
         return np.nan
-    try:
-        return round(float(chi2_contingency(table).pvalue), 6)
-    except ValueError:
+    t = table.values
+    if sig == "fisher_rxc":
+        if not _has_r():
+            raise ValueError(
+                "sig='fisher_rxc' needs R >= 4.5 + rpy2 (install 'c4fairness[r]'); "
+                "use sig='auto', 'chi2', or 'fisher_ova' for a scipy-only run."
+            )
+        return fisher_rxc_p(t)
+    if sig == "chi2":
+        return _chi2_with_zerocell(t)
+    if sig == "fisher_ova":
+        return _ova_fisher_fdr(t)
+    if sig != "auto":
+        raise ValueError(f"unknown sig '{sig}'; use auto, fisher_rxc, chi2, or fisher_ova")
+    if _has_r():
+        return fisher_rxc_p(t)
+    _warn_no_r_once()
+    return _chi2_with_zerocell(t) if _cells_adequate(t) else _ova_fisher_fdr(t)
+
+
+def _anova_sep_p(values, labels):
+    """One-way ANOVA omnibus p across clusters for a numeric column. NaN on
+    degenerate input."""
+    df = pd.DataFrame({"v": pd.Series(values).values, "c": np.asarray(labels)})
+    df = df[df["c"] != -1].dropna(subset=["v"])
+    if df["c"].nunique() < 2:
         return np.nan
+    groups = [g["v"].values for _, g in df.groupby("c") if len(g) > 0]
+    if len(groups) < 2:
+        return np.nan
+    try:
+        return round(float(stats.f_oneway(*groups).pvalue), 6)
+    except (ValueError, FloatingPointError):
+        return np.nan
+
+
+def error_sep_p(values, labels, error_kind, sig="auto"):
+    """Overview error 'sep.': one omnibus p across all clusters. Continuous error ->
+    one-way ANOVA; binary / multi-class error -> categorical separability via `sig`
+    (see _categorical_sep_p). NaN on degenerate input."""
+    if error_kind == "numeric":
+        return _anova_sep_p(values, labels)
+    return _categorical_sep_p(values, labels, sig)
 
 
 def error_kind_for(error_type, multiclass_option=None):

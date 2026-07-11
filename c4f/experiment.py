@@ -94,7 +94,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # Euclidean (dummies already in sensitive_cols) and Gower (factorized original
     # in sensitive_cols) paths.
     sensitive_cols_analysis = _build_sensitive_analysis_list(
-        sensitive_cols, multiclass_dummies, original_sensitive_cols
+        sensitive_cols, multiclass_dummies, original_sensitive_cols,
+        option=args.multicat_table_option,
     )
 
     # Build groups dict for condition generation
@@ -103,7 +104,10 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         groups['REG'] = regular_cols
     if sensitive_cols:
         groups['SEN'] = sensitive_cols
-    groups['ERR'] = [error_col]
+    # ERR clustering feature is a numeric 0/1 misclassification indicator (multi-class
+    # per_class/per_cell error columns are categorical labels that can't be scaled).
+    # error_col itself still drives scoring + the result tables.
+    groups['ERR'] = [getattr(args, 'error_cluster_col', None) or error_col]
     if proxy_cols:
         groups['PROXY'] = proxy_cols
     if special_cols:
@@ -195,6 +199,9 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         multiclass_option=args.error_multiclass_option,
         error_cols=args.error_cols,
         error_cols_kind=args.error_cols_kind,
+        multiclass_dummies=multiclass_dummies,
+        original_sensitive_cols=original_sensitive_cols,
+        multicat_table_option=args.multicat_table_option,
     )
 
     # Print progress for each condition
@@ -211,7 +218,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                              error_type=args.error_type, error_col=error_col,
                              continuous_sensitive_cols=continuous_sensitive_cols,
                              multiclass_option=args.error_multiclass_option,
-                             error_cols=args.error_cols)
+                             error_cols=args.error_cols,
+                             sig=getattr(args, 'multicat_sig', 'auto'))
     chi_res.to_csv(f"{output_dir}/chi_res.csv", index=False)
     print(f"\nSaved: chi_res.csv")
 

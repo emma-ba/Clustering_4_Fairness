@@ -2,6 +2,7 @@
 
 import os
 import argparse
+import pandas as pd
 from datetime import datetime
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,13 +59,33 @@ def parse_feature_weights(
     return weights if weights else None
 
 
+def parse_projection_list(s):
+    """Comma-separated projection methods (e.g. 'pca,tsne'). 'none' anywhere -> skip all."""
+    methods = [m.strip() for m in s.split(",") if m.strip()]
+    return [] if "none" in methods else methods
+
+
 def _build_sensitive_analysis_list(
-    sensitive_cols, multiclass_dummies, original_sensitive_cols
+    sensitive_cols, multiclass_dummies, original_sensitive_cols, option="onehot"
 ):
-    """Binary/numeric sensitives + readable multi-class dummies, factorized
-    originals dropped. Deduplicated: under Euclidean/Manhattan the dummies already
-    sit in sensitive_cols (clustered); under Gower sensitive_cols holds the
-    factorized original and the dummies are added back here."""
+    """Which sensitive columns the result tables analyze.
+
+    option='onehot' (default): one binary column per category — the readable multi-class
+    dummies (factorized originals dropped). Deduplicated: under Euclidean/Manhattan the
+    dummies already sit in sensitive_cols (clustered); under Gower sensitive_cols holds
+    the factorized original and the dummies are added back here.
+
+    option='salient': one multi-categorical column per feature (winning category). The
+    dummies/factorized originals are dropped and the readable original name is used;
+    apply_salient_reconstruction() must rebuild that column into the recap frame."""
+    if option == "salient":
+        dummy_set = {d for ds in multiclass_dummies.values() for d in ds}
+        analysis = [c for c in sensitive_cols
+                    if c not in multiclass_dummies and c not in dummy_set]
+        for orig_col in multiclass_dummies:
+            if orig_col in original_sensitive_cols and orig_col not in analysis:
+                analysis.append(orig_col)
+        return analysis
     analysis = [c for c in sensitive_cols if c not in multiclass_dummies]
     for orig_col, dummies in multiclass_dummies.items():
         if orig_col in original_sensitive_cols:
@@ -72,6 +93,25 @@ def _build_sensitive_analysis_list(
                 if dc not in analysis:
                     analysis.append(dc)
     return analysis
+
+
+def _reconstruct_multicat(df, orig, dummies):
+    """Readable category per row from its all-K one-hot dummies (exactly one 1 per row).
+    Rebuilds a multi-categorical sensitive column for the 'salient' table option — the
+    original was replaced by dummies (Euclidean) or factorized to codes (Gower)."""
+    present = [d for d in dummies if d in df.columns]
+    labels = [d[len(orig) + 1:] for d in present]  # strip 'orig_' prefix
+    idx = df[present].to_numpy(dtype=float).argmax(axis=1)
+    return pd.Series([labels[i] for i in idx], index=df.index)
+
+
+def apply_salient_reconstruction(df, multiclass_dummies, original_sensitive_cols):
+    """For the 'salient' table option: rebuild each readable multi-categorical sensitive
+    column from its dummies, in place. Use on the POST-clustering recap frame so the Gower
+    code column used for clustering is left untouched."""
+    for orig, dummies in multiclass_dummies.items():
+        if orig in original_sensitive_cols:
+            df[orig] = _reconstruct_multicat(df, orig, dummies)
 
 
 def parse_args():
@@ -220,8 +260,10 @@ def parse_args():
         "--projection",
         type=str,
         default="tsne",
-        choices=["pca", "tsne", "mds", "none"],
-        help="Projection method for visualization. When --distance gower is used, MDS is applied automatically with the precomputed Gower matrix regardless of this flag. Use 'none' to skip.",
+        help="Projection method(s) for visualization: comma-separated from pca, tsne, mds "
+        "(e.g. 'pca,tsne' emits one plot each). t-SNE uses the same distance as clustering "
+        "(precomputed Gower matrix under --distance gower, Manhattan under --distance manhattan). "
+        "Use 'none' to skip. Default: tsne.",
     )
 
     parser.add_argument(
@@ -295,6 +337,38 @@ def parse_args():
         default="binary",
         choices=["binary", "regression", "multiclass"],
         help="Type of error column: 'binary' (classification 0/1), 'regression' (continuous), or 'multiclass' (3+ class predictions; the error column is derived from --y_true_col / --y_pred_col). Default: binary",
+    )
+    parser.add_argument(
+        "--binary_error_metric",
+        type=str,
+        default="raw",
+        choices=["raw", "fpr", "fnr", "precision", "prec_neg"],
+        help="Binary error definition for the result tables (only with --error_type binary). "
+        "'raw' (default): use --error_col as-is (proportion positive). The rate options are "
+        "derived from --y_true_col / --y_pred_col per cluster: 'fpr' FP/(FP+TN), 'fnr' "
+        "FN/(FN+TP), 'precision' 1-Precision = FP/(FP+TP), 'prec_neg' 1-Precision-for-Negative "
+        "= FN/(FN+TN). Positive class = the larger label.",
+    )
+    parser.add_argument(
+        "--multicat_table_option",
+        type=str,
+        default="onehot",
+        choices=["onehot", "salient"],
+        help="How multi-categorical SENSITIVE features appear in the result tables. "
+        "'onehot' (default): one binary column per category. 'salient': one column per "
+        "feature showing the winning category and its value. Independent of the clustering "
+        "distance/encoding.",
+    )
+    parser.add_argument(
+        "--multicat_sig",
+        type=str,
+        default="auto",
+        choices=["auto", "fisher_rxc", "chi2", "fisher_ova"],
+        help="Omnibus separability test for multi-class errors / multi-categorical "
+        "sensitive features (Overview error_sep / <F>_sep). 'auto' (default): exact "
+        "r x c Fisher via R when available (needs 'c4fairness[r]' + R >= 4.5), else "
+        "scipy (chi-square when cell counts are adequate, else one-vs-all 2x2 Fisher). "
+        "'fisher_rxc' forces R (errors if absent); 'chi2' / 'fisher_ova' force scipy.",
     )
     parser.add_argument(
         "--error_multiclass_option",

@@ -15,6 +15,7 @@ from sklearn.metrics import silhouette_samples
 from scipy.stats import chi2_contingency, kruskal, mannwhitneyu, false_discovery_control
 from itertools import combinations
 from .clustering import cluster
+from .cli import apply_salient_reconstruction
 from .fairness_metrics import (
     mean_diff,
     feature_kind, cluster_value, cluster_value_cat, overview_gap, overview_gap_cat,
@@ -208,9 +209,6 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
     # Add silhouette score
     silhouette.append(silhouette_val[clusters == c].mean())
 
-    rest_recap = recap.loc[recap['clusters'] != c]
-    rest_count = rest_recap['count'].sum()
-
     # Error — one-vs-all signed gap, then a family-appropriate gap-significance
     # test (numeric: Mann-Whitney; binary/multicat: Fisher 2x2 on the positive /
     # most-divergent category) via onevsall_gap_p. onehot: one binary set per class.
@@ -231,8 +229,10 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         error_gap.append(round(onevsall_gap(c_err, rest_err, 'multicat'), 4))
         error_gap_cat_acc.append(onevsall_gap_cat(c_err, rest_err))
       else:
-        rest_n_error = rest_recap['n_error'].sum()
-        error_gap.append(recap['error_value'][c] - rest_n_error / rest_count)
+        # binary error rate: one-vs-all gap over the non-NaN denominator. A masked
+        # rate column marks rows outside the rate's denominator with NaN; onevsall_gap
+        # drops them. Equals the old n_error/count shortcut for a plain 0/1 column.
+        error_gap.append(onevsall_gap(c_data[error_col], rest_data[error_col], 'binary'))
       error_gap_sig.append(onevsall_gap_p(c_data[error_col], rest_data[error_col], error_kind))
 
     # Per-feature one-vs-all signed gap and gap-significance.
@@ -370,7 +370,7 @@ def separability_check(data, labels, columns):
 # Utils for Results - Chi-Square Tests
 # =============================================================================
 
-def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', continuous_sensitive_cols=None, multiclass_option=None, error_cols=None):
+def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, sig='auto'):
   """
   Compute one omnibus separability p-value per condition for the error column
   and for each sensitive feature.
@@ -430,12 +430,12 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 
     if onehot:
       for ec in error_cols:
-        chi_res[f'{ec}_sep'].append(error_sep_p(res_df[ec], labels, 'binary'))
+        chi_res[f'{ec}_sep'].append(error_sep_p(res_df[ec], labels, 'binary', sig=sig))
     else:
-      chi_res['error_sep'].append(error_sep_p(res_df[error_col], labels, error_kind))
+      chi_res['error_sep'].append(error_sep_p(res_df[error_col], labels, error_kind, sig=sig))
     for F in sensitive_cols:
       kind = feature_kind(res_df[F], F in continuous_set)
-      chi_res[f'{F}_sep'].append(omnibus_separability_p(res_df[F], labels, kind))
+      chi_res[f'{F}_sep'].append(omnibus_separability_p(res_df[F], labels, kind, sig=sig))
 
   chi_df = pd.DataFrame(chi_res)
 
@@ -625,7 +625,9 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             standardize=True,
                             continuous_sensitive_cols=None,
                             ohe_col_names=None, multiclass_option=None,
-                            error_cols=None, error_cols_kind='binary'):
+                            error_cols=None, error_cols_kind='binary',
+                            multiclass_dummies=None, original_sensitive_cols=None,
+                            multicat_table_option='onehot'):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -726,6 +728,11 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
       res_df.loc[result.mask, 'clusters'] = result.labels
     else:
       res_df['clusters'] = result.labels
+
+    # 'salient': rebuild readable multi-categorical sensitive columns into this recap
+    # frame before make_recap / make_chi_tests read them (res_df is stored in results).
+    if multicat_table_option == 'salient' and multiclass_dummies:
+      apply_salient_reconstruction(res_df, multiclass_dummies, original_sensitive_cols or [])
 
     recap = make_recap(res_df, feature_set,
                        sensitive_cols=sensitive_cols, error_col=error_col,

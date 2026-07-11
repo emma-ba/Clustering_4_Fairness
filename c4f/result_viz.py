@@ -212,6 +212,8 @@ def render_result_heatmap(
                 ax=ax,
                 robust=True,
                 cmap=cmap,
+                linewidths=0.5,      # Excel-style cell gridlines on value/p-value cells
+                linecolor="white",
             )
         ax.xaxis.tick_top()
         ax.tick_params(axis="x", which="major", length=0)

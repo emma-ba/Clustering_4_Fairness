@@ -19,12 +19,14 @@ from c4f.scoring import (
 from c4f.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
 from c4f.experiments import make_recap, separability_check, plot_cluster_recap_heatmap
 from c4f.preprocessing import encode_categoricals
-from c4f.fairness_metrics import multiclass_error_types
+from c4f.fairness_metrics import multiclass_error_types, binary_error_rate_column
 from c4f.cli import (
     parse_args,
     parse_column_list,
     parse_feature_weights,
     _build_sensitive_analysis_list,
+    apply_salient_reconstruction,
+    parse_projection_list,
     OUTPUT_DIR,
 )
 from c4f.experiment import run_batch_experiment
@@ -72,6 +74,41 @@ def main():
                 "--error_type regression requires either --error_col or both --y_true_col and --y_pred_col"
             )
 
+    # Binary error rate (FPR/FNR/Precision/Prec-neg): derive a per-row {1,0,NaN} column
+    # whose per-cluster mean is the chosen confusion-matrix rate (NaN = rows outside that
+    # rate's denominator). Only the recap tables read it; clustering/scoring keep a plain
+    # 0/1 misclassification signal, since NaN would break the error scorers.
+    args.error_analysis_col = None
+    if args.error_type == "binary" and args.binary_error_metric != "raw":
+        if args.experiment is not None:
+            raise ValueError(
+                "--binary_error_metric is not yet supported in --experiment mode; "
+                "run a single clustering (omit --experiment)."
+            )
+        if not (args.y_true_col and args.y_pred_col):
+            raise ValueError(
+                f"--binary_error_metric {args.binary_error_metric} requires "
+                "--y_true_col and --y_pred_col."
+            )
+        df["_binary_error_rate"] = binary_error_rate_column(
+            df[args.y_true_col], df[args.y_pred_col], args.binary_error_metric
+        ).values
+        args.error_analysis_col = "_binary_error_rate"
+        if not args.error_col:
+            df["_binary_misclassified"] = (
+                df[args.y_true_col] != df[args.y_pred_col]
+            ).astype(int)
+            args.error_col = "_binary_misclassified"
+        if not getattr(args, "error_label", None):
+            args.error_label = {
+                "fpr": "FP Rate", "fnr": "FN Rate",
+                "precision": "1 - Precision", "prec_neg": "1 - Prec. (neg)",
+            }[args.binary_error_metric]
+        print(
+            f"  Binary error metric '{args.binary_error_metric}' "
+            f"from {args.y_true_col} vs {args.y_pred_col}"
+        )
+
     # Multi-class error: derive a categorical/indicator error column from y_true/y_pred.
     # error_cols (+ error_cols_kind) is set for the per-class multi-column options
     # (onehot = binary indicators, classwise = TP/FN/FP/TN multi-categorical).
@@ -85,18 +122,24 @@ def main():
         err_df = multiclass_error_types(
             df[args.y_true_col], df[args.y_pred_col], args.error_multiclass_option
         )
+        # A 0/1 misclassification indicator is the ERR clustering feature: the
+        # per_class / per_cell error columns are categorical labels ('correct', '0->1')
+        # that cannot be scaled/clustered. The derived error column below drives scoring
+        # and the result tables. error_cluster_col is what experiment mode's ERR group
+        # clusters on (single-run clusters on the feature columns, not the error).
+        df["_multiclass_error_ind"] = (
+            df[args.y_true_col] != df[args.y_pred_col]
+        ).astype(int)
+        args.error_cluster_col = "_multiclass_error_ind"
         if args.error_multiclass_option in ("onehot", "classwise"):
-            # One error column per class -> one result-table set each. A single
-            # 'any error' indicator drives clustering's ERR group + scoring.
+            # One error column per class -> one result-table set each.
             for col in err_df.columns:
                 df[col] = err_df[col].values
             args.error_cols = list(err_df.columns)
             args.error_cols_kind = (
                 "binary" if args.error_multiclass_option == "onehot" else "multicat"
             )
-            df["_multiclass_error"] = (
-                df[args.y_true_col] != df[args.y_pred_col]
-            ).astype(int)
+            df["_multiclass_error"] = df["_multiclass_error_ind"]
             args.error_col = "_multiclass_error"
         else:
             df["_multiclass_error"] = err_df["error"].values
@@ -282,7 +325,8 @@ def main():
 
     # Fairness-analysis sensitive list (see _build_sensitive_analysis_list).
     sensitive_cols_analysis = _build_sensitive_analysis_list(
-        sensitive_cols, multiclass_dummies, original_sensitive_cols
+        sensitive_cols, multiclass_dummies, original_sensitive_cols,
+        option=args.multicat_table_option,
     )
 
     # Build clustering features
@@ -420,12 +464,18 @@ def main():
         if result.mask is not None:
             res_df = res_df[result.mask].copy()
         res_df["clusters"] = result.labels
+        # 'salient': rebuild readable multi-categorical columns into the recap frame
+        # (post-clustering, so Gower's code column used for clustering is untouched).
+        if args.multicat_table_option == "salient":
+            apply_salient_reconstruction(
+                res_df, multiclass_dummies, original_sensitive_cols
+            )
 
         recap = make_recap(
             res_df,
             clustering_cols,
             sensitive_cols=sensitive_cols_analysis,
-            error_col=args.error_col,
+            error_col=args.error_analysis_col or args.error_col,
             error_type=args.error_type,
             feature_matrix=result.feature_matrix,
             distance_matrix=result.distance_matrix,
@@ -472,23 +522,21 @@ def main():
 
     # Visualization
     if not args.no_plots:
-        print(f"\nGenerating visualizations ({args.projection})...")
+        methods = parse_projection_list(args.projection)
+        print(f"\nGenerating visualizations ({', '.join(methods) or 'none'})...")
 
-        if args.projection != "none":
-            if args.distance == "gower" and result.distance_matrix is not None:
-                # MDS on precomputed Gower matrix — only non-noise points have a distance entry
-                non_noise = result.labels != -1
+        for method in methods:
+            # t-SNE / MDS on the precomputed Gower matrix respect the cluster distance;
+            # only non-noise points have a distance-matrix entry.
+            if args.distance == "gower" and result.distance_matrix is not None \
+                    and method in ("tsne", "mds"):
                 X_2d = reduce_dimensions(
-                    result.distance_matrix, method="mds", precomputed=True
+                    result.distance_matrix, method=method, precomputed=True
                 )
-                plot_clusters(
-                    X_2d,
-                    result.labels[non_noise],
-                    title=f"Clusters ({args.algorithm}, gower+MDS)",
-                    out_path=f"{output_dir}/clusters.png",
-                )
+                labels_2d = result.labels[result.labels != -1]
+                title = f"Clusters ({args.algorithm}, gower+{method})"
             else:
-                # Standard Euclidean projection; drop categorical columns for kprototypes
+                # Feature-space projection; drop categorical columns for kprototypes.
                 if categorical_features and args.algorithm == "kprototypes":
                     numeric_mask = [
                         i
@@ -498,13 +546,16 @@ def main():
                     X_for_viz = result.feature_matrix[:, numeric_mask].astype(float)
                 else:
                     X_for_viz = result.feature_matrix
-                X_2d = reduce_dimensions(X_for_viz, method=args.projection)
-                plot_clusters(
-                    X_2d,
-                    result.labels,
-                    title=f"Clusters ({args.algorithm}, {args.distance})",
-                    out_path=f"{output_dir}/clusters.png",
-                )
+                # t-SNE uses the same distance as clustering (Manhattan); pca/euclidean default.
+                metric = "manhattan" if (method == "tsne" and args.distance == "manhattan") \
+                    else "euclidean"
+                X_2d = reduce_dimensions(X_for_viz, method=method, metric=metric)
+                labels_2d = result.labels
+                title = f"Clusters ({args.algorithm}, {args.distance}, {method})"
+            plot_clusters(
+                X_2d, labels_2d, title=title,
+                out_path=f"{output_dir}/clusters_{method}.png",
+            )
 
         # Plot composition for each sensitive attribute
         if sensitive_cols:
