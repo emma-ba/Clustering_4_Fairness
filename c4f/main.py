@@ -27,6 +27,7 @@ from c4f.cli import (
     _build_sensitive_analysis_list,
     apply_salient_reconstruction,
     parse_projection_list,
+    parse_label_map,
     OUTPUT_DIR,
 )
 from c4f.experiment import run_batch_experiment
@@ -489,7 +490,8 @@ def main():
                 getattr(args, "error_label", None) or args.error_col or "error"
             )
             plot_cluster_recap_heatmap(
-                recap.copy(), run_name, output_dir, error_label=error_label
+                recap.copy(), run_name, output_dir, error_label=error_label,
+                sensitive_labels=parse_label_map(getattr(args, "sensitive_labels", None)),
             )
             print(f"Saved: {run_name}.png")
 

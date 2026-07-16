@@ -59,6 +59,16 @@ def parse_feature_weights(
     return weights if weights else None
 
 
+def parse_label_map(s):
+    """'col:Label,col2:Label2' -> {col: Label} for display-label overrides. Empty -> {}."""
+    out = {}
+    for pair in (s or "").split(","):
+        if ":" in pair:
+            k, v = pair.split(":", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
 def parse_projection_list(s):
     """Comma-separated projection methods (e.g. 'pca,tsne'). 'none' anywhere -> skip all."""
     methods = [m.strip() for m in s.split(",") if m.strip()]
@@ -330,6 +340,14 @@ def parse_args():
         type=str,
         default=None,
         help="Display name for the error column in output tables and heatmaps. Defaults to the value of --error_col.",
+    )
+    parser.add_argument(
+        "--sensitive_labels",
+        type=str,
+        default=None,
+        help="Display labels for sensitive features in heatmaps, as 'col:Label,col2:Label2'. "
+        "Keys are the analysis-column names as they appear in the recap (e.g. a binary "
+        "string feature 'sex' becomes 'sex_Male'). Display-only; CSVs keep raw names.",
     )
     parser.add_argument(
         "--error_type",

@@ -21,7 +21,7 @@ from c4f.experiments import (
     separability_check,
 )
 from c4f.preprocessing import encode_categoricals
-from c4f.cli import parse_column_list, parse_feature_weights, _build_sensitive_analysis_list
+from c4f.cli import parse_column_list, parse_feature_weights, _build_sensitive_analysis_list, parse_label_map
 
 
 def run_batch_experiment(df, args, output_dir, metadata=None):#
@@ -247,13 +247,14 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                              error_cols=args.error_cols,
                              error_cols_kind=args.error_cols_kind)
 
+    slabels = parse_label_map(getattr(args, 'sensitive_labels', None))
     if not args.no_plots:
       # Separability test heatmap
       chi_viz_cols = err_sep_cols + sep_cols
       chi_res_viz = chi_res[chi_viz_cols].copy()
       chi_res_viz.index = chi_res['cond_name'].str.strip()
       plot_quality_heatmap(chi_res_viz, f"{output_dir}/chi_res_heatmap.png",
-                           error_label=error_label,
+                           error_label=error_label, sensitive_labels=slabels,
                            title="Separability Test Results (p-values)")
       print(f"Saved: chi_res_heatmap.png")
 
@@ -263,7 +264,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
       all_quali_viz = all_quali[quali_viz_cols].copy()
       all_quali_viz.index = all_quali['cond_name'].str.strip()
       plot_quality_heatmap(all_quali_viz, f"{output_dir}/all_quali_heatmap.png",
-                           error_label=error_label)
+                           error_label=error_label, sensitive_labels=slabels)
       plt.close()
       print(f"Saved: all_quali_heatmap.png")
 
@@ -273,7 +274,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         for i, cond_name in enumerate(results['cond_name']):
             recap = results['cond_recap'][i].copy()
             if len(recap) > 1:  # Only plot if there are multiple clusters
-                plot_cluster_recap_heatmap(recap, cond_name, output_dir, error_label=error_label)
+                plot_cluster_recap_heatmap(recap, cond_name, output_dir, error_label=error_label,
+                                           sensitive_labels=slabels)
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
 

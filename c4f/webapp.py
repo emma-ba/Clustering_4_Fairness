@@ -23,6 +23,17 @@ import pandas as pd
 HOME_MD = """
 # c4fairness — Clustering for Fairness
 
+Upload a CSV, choose your columns, and run. Results (heatmaps + tables) appear in the tabs
+below. See the **Documentation** page (top navbar) for column roles and options.
+
+*Exact multi-categorical Fisher needs R ≥ 4.5 + `c4fairness[r]`; otherwise a scipy fallback
+is used automatically.*
+"""
+
+
+DOC_MD = """
+## Documentation
+
 **Discover where a model's errors fall unevenly.** `c4fairness` clusters the rows of a
 model's test set and reports how prediction-error disparities and sensitive-attribute
 composition vary across the discovered clusters — surfacing under-served subgroups
@@ -34,21 +45,6 @@ those pockets and quantifies the disparity with proper significance tests.
 
 **Made at Vrije Universiteit Amsterdam (VU), in collaboration with the University of
 Twente (UT).**
-
-<!-- Add further information here (authors, funding, links, citation). -->
-
----
-
-Upload a CSV, choose your columns, and run. Results (heatmaps + tables) appear in the tabs
-below. See the **Documentation** tab for column roles and options.
-
-*Exact multi-categorical Fisher needs R ≥ 4.5 + `c4fairness[r]`; otherwise a scipy fallback
-is used automatically.*
-"""
-
-
-DOC_MD = """
-## Documentation
 
 ### Workflow
 1. **Upload** a CSV where each row is one test-set example (features + the model's outputs).
@@ -85,8 +81,27 @@ darker = more significant). A cluster with a high error gap and a significant `g
 where the model most misfires — read its sensitive columns to see which group it concentrates.
 
 ### More
-Worked examples: `docs/example_binary.ipynb`, `docs/example_regression.ipynb`.
-Research directions & publishing plan: `docs/RESEARCH.md`.
+Worked examples: `docs/example_binary.ipynb`, `docs/example_regression.ipynb` are available in the [Github repository](https://github.com/emma-ba/Clustering_4_Fairness)
+"""
+
+
+ABOUT_MD = """
+## About
+
+**c4fairness** clusters a model's test set to surface where prediction errors fall
+unevenly across sensitive-attribute subgroups — *without* pre-specifying the protected
+group. See the **Documentation** page for how to use it.
+
+### Project
+- **Package:** `c4fairness` (v0.1.1) — `pip install c4fairness`
+- **Source:** <https://github.com/emma-ba/Clustering_4_Fairness>
+
+### Authors
+- Filip Muntean — <filip.mihai.muntean@gmail.com>
+- Emma Beauxis-Aussalet — <e.m.a.l.beauxisaussalet@vu.nl>
+
+Made at **Vrije Universiteit Amsterdam (VU)**, in collaboration with the
+**University of Twente (UT)**.
 """
 
 
@@ -114,6 +129,7 @@ def _build_cmd(
     proxy="",
     special="",
     error_label="",
+    sensitive_labels="",
     binary_error_metric="raw",
     n_min="",
     n_max="",
@@ -192,6 +208,8 @@ def _build_cmd(
         cmd += ["--special_cols", special]
     if error_label:
         cmd += ["--error_label", error_label]
+    if sensitive_labels:
+        cmd += ["--sensitive_labels", sensitive_labels]
     if error_type == "binary":
         if binary_error_metric != "raw":
             # FPR/FNR/... are derived per cluster from y_true/y_pred, not a fixed column.
@@ -254,6 +272,7 @@ def _run(
     proxy,
     special,
     error_label,
+    sensitive_labels,
     binary_error_metric,
     n_min,
     n_max,
@@ -295,6 +314,7 @@ def _run(
         proxy=_csv1(proxy),
         special=_csv1(special),
         error_label=error_label or "",
+        sensitive_labels=sensitive_labels or "",
         binary_error_metric=binary_error_metric,
         n_min=n_min or "",
         n_max=n_max or "",
@@ -381,6 +401,11 @@ def _build():
             )
             error_label = gr.Textbox(
                 label="Error display label (optional)", placeholder="e.g. FP Rate"
+            )
+            sensitive_labels = gr.Textbox(
+                label="Sensitive display labels (optional)",
+                placeholder="race:Ethnicity,sex_Male:Male",
+                info="Heatmap labels per analysis-column name; CSVs keep raw names",
             )
             binary_error_metric = gr.Dropdown(
                 ["raw", "fpr", "fnr", "precision", "prec_neg"], value="raw",
@@ -488,8 +513,6 @@ def _build():
             files = gr.File(label="All CSV outputs", file_count="multiple")
         with gr.Tab("Log"):
             log = gr.Textbox(label="Run log", lines=18)
-        with gr.Tab("Documentation"):
-            gr.Markdown(DOC_MD)
 
         # Populate every column picker from the uploaded CSV header.
         _pickers = [regular, sensitive, continuous_sensitive, proxy, special,
@@ -552,6 +575,7 @@ def _build():
                 proxy,
                 special,
                 error_label,
+                sensitive_labels,
                 binary_error_metric,
                 n_min,
                 n_max,
@@ -568,6 +592,13 @@ def _build():
             ],
             outputs=[log, gallery, files, preview],
         )
+
+    with demo.route("Documentation", "/documentation"):
+        gr.Markdown(DOC_MD)
+
+    with demo.route("About", "/about"):
+        gr.Markdown(ABOUT_MD)
+
     return demo
 
 

@@ -120,3 +120,9 @@ def test_build_cmd_binary_rate_uses_y_cols_and_metric():
 def test_build_cmd_binary_raw_still_uses_error_col():
     c = _base()  # binary_error_metric defaults to 'raw'
     assert "--error_col" in c and "--binary_error_metric" not in c
+
+
+def test_build_cmd_sensitive_labels():
+    c = _base(sensitive_labels="race:Ethnicity,sex_Male:Male")
+    assert c[c.index("--sensitive_labels") + 1] == "race:Ethnicity,sex_Male:Male"
+    assert "--sensitive_labels" not in _base()  # omitted when empty

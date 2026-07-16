@@ -82,11 +82,12 @@ _FAMILY_TINT = {
 }
 
 
-def classify_column(col, error_label="error"):
+def classify_column(col, error_label="error", sensitive_labels=None):
     """Map a result-table column to (family, kind, display_label).
 
     family: 'size' | 'error' | 'sensitive' | 'meta'
     kind:   'value' | 'pvalue' | 'category'
+    `sensitive_labels` optionally maps a feature name to a display label.
     """
     if col in _SIZE_COLS:
         return "size", "value", _SIZE_COLS[col]
@@ -115,7 +116,9 @@ def classify_column(col, error_label="error"):
         return "error", "value", error_label
     for suf, kind, tmpl in _FEAT_SUFFIXES:
         if col.endswith(suf):
-            return "sensitive", kind, tmpl.format(f=col[: -len(suf)])
+            fname = col[: -len(suf)]
+            disp = (sensitive_labels or {}).get(fname, fname)
+            return "sensitive", kind, tmpl.format(f=disp)
     return "meta", "value", col
 
 
@@ -141,7 +144,8 @@ def _annot_strings(df_segment):
 
 
 def render_result_heatmap(
-    df, output_path, error_label="error", title=None, figsize=None, fmt=".4g"
+    df, output_path, error_label="error", title=None, figsize=None, fmt=".4g",
+    sensitive_labels=None,
 ):
     """Render a result table as a color-coded heatmap.
 
@@ -154,7 +158,7 @@ def render_result_heatmap(
     if not cols:
         return
 
-    specs = [classify_column(c, error_label) for c in cols]
+    specs = [classify_column(c, error_label, sensitive_labels) for c in cols]
     # Per-column color key: ('__cat__', family) for text cols, else (cmap, family).
     keys = [
         (
@@ -232,7 +236,8 @@ def render_result_heatmap(
 
 
 def plot_quality_heatmap(
-    all_quali_viz, output_path, figsize=None, error_label="error", title=None
+    all_quali_viz, output_path, figsize=None, error_label="error", title=None,
+    sensitive_labels=None,
 ):
     """Plot the Overview quality heatmap with blue/red/violet color families.
 
@@ -244,11 +249,13 @@ def plot_quality_heatmap(
     if not cols:
         return
     render_result_heatmap(
-        df[cols], output_path, error_label=error_label, title=title, figsize=figsize
+        df[cols], output_path, error_label=error_label, title=title, figsize=figsize,
+        sensitive_labels=sensitive_labels,
     )
 
 
-def plot_cluster_recap_heatmap(recap, cond_name, output_dir, error_label="error"):
+def plot_cluster_recap_heatmap(recap, cond_name, output_dir, error_label="error",
+                               sensitive_labels=None):
     """Plot the per-cluster Detailed heatmap (one row per cluster).
 
     Columns are ordered Size -> Error -> Sensitive and coloured by family
@@ -267,5 +274,6 @@ def plot_cluster_recap_heatmap(recap, cond_name, output_dir, error_label="error"
         return
     out_path = f"{output_dir}/" + re.sub(" +", "", cond_name) + ".png"
     render_result_heatmap(
-        df[cols], out_path, error_label=error_label, title=re.sub(" +", " ", cond_name)
+        df[cols], out_path, error_label=error_label, title=re.sub(" +", " ", cond_name),
+        sensitive_labels=sensitive_labels,
     )
