@@ -1,5 +1,5 @@
 import numpy as np
-from src.scoring import make_categorical_error_scorer, make_composite_scorer
+from c4fairness.scoring import make_categorical_error_scorer, make_composite_scorer
 
 
 def test_categorical_error_scorer_rewards_separation():

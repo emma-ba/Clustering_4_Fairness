@@ -50,9 +50,9 @@ web = ["gradio", "rpy2"]
 kmedoids = ["scikit-learn-extra"]
 
 [project.scripts]
-c4f = "c4f.main:main"
-c4f-web = "c4f.webapp:launch"
+c4fairness = "c4fairness.main:main"
+c4fairness-web = "c4fairness.webapp:launch"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["c4f*"]
+include = ["c4fairness*"]

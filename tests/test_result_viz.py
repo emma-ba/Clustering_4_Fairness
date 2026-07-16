@@ -1,4 +1,4 @@
-from c4f.result_viz import classify_column
+from c4fairness.result_viz import classify_column
 
 
 def test_sensitive_label_override():

@@ -1,4 +1,4 @@
-"""Batch experiment mode for c4f: run all feature-group conditions and write
+"""Batch experiment mode for c4fairness: run all feature-group conditions and write
 the Overview/Detailed tables, heatmaps and CSVs."""
 import os
 import re
@@ -6,22 +6,22 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
-from c4f.clustering import gower_distance
-from c4f.scoring import (
+from c4fairness.clustering import gower_distance
+from c4fairness.scoring import (
     make_chi2_error_scorer,
     make_kruskal_error_scorer,
     make_categorical_error_scorer,
     make_chi2_sensitive_scorer, make_composite_scorer,
 )
-from c4f.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
-from c4f.experiments import (
+from c4fairness.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
+from c4fairness.experiments import (
     create_exp_conditions,
     run_experiments_generic, make_chi_tests,
     recap_quali_metrics, plot_quality_heatmap, plot_cluster_recap_heatmap,
     separability_check,
 )
-from c4f.preprocessing import encode_categoricals
-from c4f.cli import parse_column_list, parse_feature_weights, _build_sensitive_analysis_list, parse_label_map
+from c4fairness.preprocessing import encode_categoricals
+from c4fairness.cli import parse_column_list, parse_feature_weights, _build_sensitive_analysis_list, parse_label_map
 
 
 def run_batch_experiment(df, args, output_dir, metadata=None):#

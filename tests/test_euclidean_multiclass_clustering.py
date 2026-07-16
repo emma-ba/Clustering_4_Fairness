@@ -19,9 +19,9 @@ Intended behaviour:
 import numpy as np
 import pandas as pd
 
-from c4f.preprocessing import encode_categoricals
-from c4f.cli import _build_sensitive_analysis_list
-from c4f.clustering import cluster
+from c4fairness.preprocessing import encode_categoricals
+from c4fairness.cli import _build_sensitive_analysis_list
+from c4fairness.clustering import cluster
 
 REGIONS = [
     "East Anglian Region", "Scotland", "London Region", "South Region",

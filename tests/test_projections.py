@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 from scipy.spatial.distance import pdist, squareform
-from c4f.visualization import reduce_dimensions
-from c4f.cli import parse_projection_list
+from c4fairness.visualization import reduce_dimensions
+from c4fairness.cli import parse_projection_list
 
 
 def test_parse_projection_list_multiple():

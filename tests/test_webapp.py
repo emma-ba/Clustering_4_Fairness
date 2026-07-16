@@ -1,5 +1,5 @@
 import sys
-from c4f.webapp import _build_cmd
+from c4fairness.webapp import _build_cmd
 
 
 def test_build_cmd_binary_uses_error_col():

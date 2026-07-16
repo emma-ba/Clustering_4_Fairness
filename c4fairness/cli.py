@@ -1,4 +1,4 @@
-"""CLI argument parsing and shared column/weight helpers for c4f."""
+"""CLI argument parsing and shared column/weight helpers for c4fairness."""
 
 import os
 import argparse

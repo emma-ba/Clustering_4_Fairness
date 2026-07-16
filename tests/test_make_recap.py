@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from src.experiments import make_recap, recap_quali_metrics
+from c4fairness.experiments import make_recap, recap_quali_metrics
 
 def _toy():
     df = pd.DataFrame({
@@ -67,7 +67,7 @@ def _multiclass_results():
 
 def test_overview_multiclass_error_emits_gap_class():
     chi_res, results = _multiclass_results()
-    ov = recap_quali_metrics(chi_res, results, None, sensitive_cols=["gender"],
+    ov = recap_quali_metrics(chi_res, results, sensitive_cols=["gender"],
                              error_col="errors", error_type="multiclass",
                              multiclass_option="per_cell")
     assert "error_gap_class" in ov.columns

@@ -1,9 +1,9 @@
 """
-Gradio web UI for c4f experiment mode.
+Gradio web UI for c4fairness experiment mode.
 
 
-Install the extra:  pip install c4f[web]   (and have R available).
-Launch:  c4f-web
+Install the extra:  pip install "c4fairness[web]"   (R >= 4.5 optional; scipy fallback otherwise).
+Launch:  c4fairness-web
 """
 
 import os
@@ -14,6 +14,8 @@ import subprocess
 import pandas as pd
 
 # gradio imported lazily inside launch() so _build_cmd stays testable without it.
+
+RUN_TIMEOUT_S = int(os.environ.get("C4F_WEB_TIMEOUT", "300"))  # per-run cap; override via env
 
 
 HOME_MD = """
@@ -138,8 +140,8 @@ def _build_cmd(
     no_standardize=False,
     projection="tsne",
 ):
-    """Assemble the `c4f --experiment ...` argv from form inputs."""
-    cmd = [sys.executable, "-m", "c4f.main", "--data_path", data_path, "--experiment"]
+    """Assemble the `c4fairness --experiment ...` argv from form inputs."""
+    cmd = [sys.executable, "-m", "c4fairness.main", "--data_path", data_path, "--experiment"]
     if exclude:
         cmd.append(exclude)
     cmd += [
@@ -327,7 +329,16 @@ def _run(
         no_standardize=bool(no_standardize),
         projection=(projection or "tsne"),
     )
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        # ponytail: hard cap so a runaway run can't hang the queue on a public demo.
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=RUN_TIMEOUT_S)
+    except subprocess.TimeoutExpired as e:
+        partial = (e.stdout or "") + (e.stderr or "")
+        return (
+            f"{partial}\n\nRun exceeded {RUN_TIMEOUT_S // 60} min and was stopped. "
+            "Try fewer rows, a smaller k range, or a simpler algorithm.",
+            [], [], None,
+        )
     log = (proc.stdout or "") + (proc.stderr or "")
     # run_batch_experiment writes into out_dir/<timestamp>_experiment_.../
     runs = sorted(glob.glob(os.path.join(out_dir, "*experiment*")))
@@ -354,7 +365,7 @@ def _build():
         "classwise",
     ]
 
-    with gr.Blocks(title="c4f — Clustering for Fairness") as demo:
+    with gr.Blocks(title="c4fairness — Clustering for Fairness") as demo:
         gr.Markdown(HOME_MD)
         file = gr.File(label="1. Dataset CSV", file_types=[".csv"])
 
@@ -628,7 +639,7 @@ def _selfcheck():
         42,
         "",
     )
-    assert c[:4] == [sys.executable, "-m", "c4f.main", "--data_path"]
+    assert c[:4] == [sys.executable, "-m", "c4fairness.main", "--data_path"]
     assert "--experiment" in c and "--error_col" in c and "err" in c
     assert "--y_true_col" not in c
     # multiclass path adds y_true/y_pred + option, not error_col

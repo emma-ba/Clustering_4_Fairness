@@ -1,10 +1,10 @@
 import numpy as np
 import pandas as pd
 import pytest
-from src.fairness_metrics import (
+from c4fairness.fairness_metrics import (
     feature_kind, cluster_value, cluster_value_cat,
     overview_gap, overview_gap_cat, onevsall_gap, onevsall_gap_cat,
-    omnibus_separability_p, onevsall_categorical_p,
+    omnibus_separability_p,
     size_metrics, extreme_pair_gap_p, onevsall_gap_p,
 )
 
@@ -87,10 +87,6 @@ def test_omnibus_numeric_uses_anova():
 def test_omnibus_single_cluster_is_nan():
     assert np.isnan(omnibus_separability_p([0, 1, 0], [0, 0, 0], "binary"))
 
-def test_onevsall_categorical_p_separation():
-    p = onevsall_categorical_p([0, 0, 0] * 10, [1, 2, 1] * 10)
-    assert p < 0.05
-
 # --- winning-category columns (Phase C) ---
 
 def test_overview_gap_cat_picks_largest_spread_category():
@@ -141,6 +137,25 @@ def test_extreme_pair_numeric_separation_low_p():
 
 def test_extreme_pair_single_cluster_is_nan():
     assert np.isnan(extreme_pair_gap_p([1, 0, 1], [0, 0, 0], "binary"))
+
+def test_extreme_pair_multicat_winning_category_low_p():
+    # category 'a' only in cluster 0, 'b' only in cluster 1 -> Fisher 2x2 significant
+    vals   = ["a"] * 10 + ["b"] * 10
+    labels = [0] * 10 + [1] * 10
+    assert extreme_pair_gap_p(vals, labels, "multicat") < 0.05
+
+def test_extreme_pair_multicat_no_separation_high_p():
+    # categories evenly split across clusters -> no separation
+    vals   = ["a", "b"] * 10
+    labels = [0] * 10 + [1] * 10
+    assert extreme_pair_gap_p(vals, labels, "multicat") > 0.05
+
+def test_extreme_pair_multicat_is_fisher_2x2_on_winning_category():
+    # cluster0: a a a b c ; cluster1: a b b c c -> winning category 'a' (.6 vs .2).
+    # Must be Fisher 2x2 on 'a' (0.52381), NOT chi2 over all categories (0.4346).
+    vals   = ["a", "a", "a", "b", "c"] + ["a", "b", "b", "c", "c"]
+    labels = [0] * 5 + [1] * 5
+    assert extreme_pair_gap_p(vals, labels, "multicat") == pytest.approx(0.52381, abs=1e-5)
 
 # --- Detailed one-vs-all gap significance (Phase E: Fisher 2x2 / Mann-Whitney) ---
 

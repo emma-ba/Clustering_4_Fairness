@@ -1,12 +1,12 @@
 import numpy as np
 import pandas as pd
 import pytest
-from c4f.cli import (
+from c4fairness.cli import (
     _build_sensitive_analysis_list,
     _reconstruct_multicat,
     apply_salient_reconstruction,
 )
-from c4f.experiments import make_recap
+from c4fairness.experiments import make_recap
 
 MCD = {"region": ["region_mid", "region_north", "region_south"]}
 ORIG = ["region", "gender"]

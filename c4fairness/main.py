@@ -1,4 +1,4 @@
-"""c4f entry point: dispatch single-run / experiment / multi-seed modes."""
+"""c4fairness entry point: dispatch single-run / experiment / multi-seed modes."""
 
 import os
 import re
@@ -8,19 +8,19 @@ from scipy.stats import combine_pvalues
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from datetime import datetime
-from c4f.clustering import cluster, gower_distance
-from c4f.scoring import (
+from c4fairness.clustering import cluster, gower_distance
+from c4fairness.scoring import (
     make_chi2_error_scorer,
     make_kruskal_error_scorer,
     make_categorical_error_scorer,
     make_chi2_sensitive_scorer,
     make_composite_scorer,
 )
-from c4f.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
-from c4f.experiments import make_recap, separability_check, plot_cluster_recap_heatmap
-from c4f.preprocessing import encode_categoricals
-from c4f.fairness_metrics import multiclass_error_types, binary_error_rate_column
-from c4f.cli import (
+from c4fairness.visualization import reduce_dimensions, plot_clusters, plot_cluster_composition
+from c4fairness.experiments import make_recap, separability_check, plot_cluster_recap_heatmap
+from c4fairness.preprocessing import encode_categoricals
+from c4fairness.fairness_metrics import multiclass_error_types, binary_error_rate_column
+from c4fairness.cli import (
     parse_args,
     parse_column_list,
     parse_feature_weights,
@@ -30,7 +30,7 @@ from c4f.cli import (
     parse_label_map,
     OUTPUT_DIR,
 )
-from c4f.experiment import run_batch_experiment
+from c4fairness.experiment import run_batch_experiment
 
 
 def main():

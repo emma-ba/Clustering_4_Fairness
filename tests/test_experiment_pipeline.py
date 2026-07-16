@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import c4f.fairness_metrics as fm
-import c4f.main as cli
+import c4fairness.fairness_metrics as fm
+import c4fairness.main as cli
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def _scipy_fisher_stub(table):
 def test_experiment_pipeline_runs(tiny_csv, tmp_path, monkeypatch, extra):
     monkeypatch.setattr(fm, "fisher_rxc_p", _scipy_fisher_stub)
     out = str(tmp_path / "out")
-    argv = ["c4f", "--data_path", tiny_csv,
+    argv = ["c4fairness", "--data_path", tiny_csv,
             "--regular_cols", "a", "--sensitive_cols", "g,r",
             "--algorithm", "kmeans", "--n_clusters", "3", "--seed", "1",
             "--experiment", "ERR", "--no_plots", "--output_dir", out] + extra
@@ -85,7 +85,7 @@ def test_experiment_err_group_multicat_error_does_not_crash(
     # strings. The ERR clustering feature must be a 0/1 misclassification indicator.
     monkeypatch.setattr(fm, "fisher_rxc_p", _scipy_fisher_stub)
     out = str(tmp_path / "out")
-    argv = ["c4f", "--data_path", tiny_csv,
+    argv = ["c4fairness", "--data_path", tiny_csv,
             "--regular_cols", "a", "--sensitive_cols", "g",
             "--algorithm", "kmeans", "--n_clusters", "3", "--seed", "1",
             "--experiment", "",  # include ALL groups, incl. ERR

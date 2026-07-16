@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from scipy.stats import chi2_contingency
-from c4f.fairness_metrics import (
+from c4fairness.fairness_metrics import (
     _chi2_with_zerocell, _ova_fisher_fdr, _has_r, error_sep_p,
 )
 
@@ -44,7 +44,7 @@ def test_error_sep_fisher_rxc_requires_r_when_absent():
 
 
 def test_error_sep_auto_falls_back_to_scipy_without_r(monkeypatch):
-    import c4f.fairness_metrics as fm
+    import c4fairness.fairness_metrics as fm
     monkeypatch.setattr(fm, "_has_r", lambda: False)
     vals = pd.Series(["a"] * 10 + ["b"] * 10)
     labels = np.array([0] * 10 + [1] * 10)
@@ -53,13 +53,13 @@ def test_error_sep_auto_falls_back_to_scipy_without_r(monkeypatch):
 
 
 def test_onevsall_gap_p_binary_chi2_matches_chi2():
-    from c4f.fairness_metrics import onevsall_gap_p, _chi2_with_zerocell
+    from c4fairness.fairness_metrics import onevsall_gap_p, _chi2_with_zerocell
     cs, rs = [1] * 8 + [0] * 2, [1] * 3 + [0] * 7
     assert onevsall_gap_p(cs, rs, "binary", test="chi2") == _chi2_with_zerocell([[8, 2], [3, 7]])
 
 
 def test_onevsall_gap_p_binary_fisher_is_default():
-    from c4f.fairness_metrics import onevsall_gap_p, _fisher_2x2
+    from c4fairness.fairness_metrics import onevsall_gap_p, _fisher_2x2
     cs, rs = [1] * 8 + [0] * 2, [1] * 3 + [0] * 7
     assert onevsall_gap_p(cs, rs, "binary") == _fisher_2x2(8, 2, 3, 7)
 
@@ -72,12 +72,12 @@ def test_extreme_pair_gap_p_chi2_option_finite():
 
 
 def extreme_pair_gap_p_import():
-    from c4f.fairness_metrics import extreme_pair_gap_p
+    from c4fairness.fairness_metrics import extreme_pair_gap_p
     return extreme_pair_gap_p
 
 
 def test_error_sep_binary_prefers_fisher_without_r(monkeypatch):
-    import c4f.fairness_metrics as fm
+    import c4fairness.fairness_metrics as fm
     monkeypatch.setattr(fm, "_has_r", lambda: False)
     err = pd.Series([1] * 8 + [0] * 2 + [1] * 3 + [0] * 7)
     lab = np.array([0] * 10 + [1] * 10)
@@ -89,7 +89,7 @@ def test_error_sep_binary_prefers_fisher_without_r(monkeypatch):
 
 def test_error_sep_numeric_still_anova(monkeypatch):
     # sig choice must not touch the numeric (ANOVA) path.
-    import c4f.fairness_metrics as fm
+    import c4fairness.fairness_metrics as fm
     vals = pd.Series([1.0, 1.1, 0.9] * 5 + [8.0, 8.1, 7.9] * 5)
     labels = np.array([0] * 15 + [1] * 15)
     assert error_sep_p(vals, labels, "numeric", sig="auto") < 0.05

@@ -600,7 +600,7 @@ def recap_quali_metrics(chi_res, results, sensitive_cols=None, continuous_sensit
 # =============================================================================
 # Visualization — result-table heatmaps (see src/result_viz.py)
 # =============================================================================
-# Re-exported so existing callers keep importing these from c4f.experiments;
+# Re-exported so existing callers keep importing these from c4fairness.experiments;
 # the implementations live in result_viz to keep this module focused on table
 # building.
 from .result_viz import (  # noqa: E402,F401

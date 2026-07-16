@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 import pytest
-from c4f.fairness_metrics import binary_error_rate_column, cluster_value
-from c4f.experiments import make_recap
+from c4fairness.fairness_metrics import binary_error_rate_column, cluster_value
+from c4fairness.experiments import make_recap
 
 # Hand-built confusion matrix: TP=3, FP=2, FN=1, TN=4 (positive label = 1).
 #   TP(x3): true=1 pred=1   FP(x2): true=0 pred=1
