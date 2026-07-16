@@ -37,7 +37,7 @@ SILHOUETTE_WORKING_MEMORY_MIB = 128
 # Utils for Results - Recap
 # =============================================================================
 
-def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, error_cols_kind='binary'):
+def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, error_cols_kind='binary', sensitive_gap_test='chi2'):
   """
   Create a per-cluster Detail recap of cluster info, error stats, and per-feature
   one-vs-all fairness metrics.
@@ -242,7 +242,7 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
       feat_gap[F].append(round(onevsall_gap(c_vals, rest_vals, kind), 4))
       if kind == 'multicat':
         feat_gap_cat[F].append(onevsall_gap_cat(c_vals, rest_vals))
-      feat_gap_sig[F].append(onevsall_gap_p(c_vals, rest_vals, kind))
+      feat_gap_sig[F].append(onevsall_gap_p(c_vals, rest_vals, kind, test=sensitive_gap_test))
 
   # Collect all new columns into a dict then concat once to avoid fragmentation.
   # Multicat error emits value/cat (modal) alongside the gap/gap-cat, mirroring a
@@ -455,7 +455,7 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 # Utils for Results - All Quality Metrics
 # =============================================================================
 
-def recap_quali_metrics(chi_res, results, sensitive_cols=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None, error_cols=None, error_cols_kind='binary'):
+def recap_quali_metrics(chi_res, results, sensitive_cols=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None, error_cols=None, error_cols_kind='binary', sensitive_gap_test='chi2'):
   """
   Build the Overview frame: per-condition silhouette, cluster-size summary, error
   separability / gap / gap-significance, and per-feature gap / gap-significance.
@@ -562,7 +562,7 @@ def recap_quali_metrics(chi_res, results, sensitive_cols=None, continuous_sensit
     for F in sensitive_cols:
       kind = kinds[F]
       feat_gap[F].append(overview_gap(res_df[F], labels, kind))
-      feat_gap_sig[F].append(extreme_pair_gap_p(res_df[F], labels, kind))
+      feat_gap_sig[F].append(extreme_pair_gap_p(res_df[F], labels, kind, test=sensitive_gap_test))
       if kind == 'multicat':
         feat_gap_cat[F].append(overview_gap_cat(res_df[F], labels))
 
@@ -626,7 +626,7 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                             ohe_col_names=None, multiclass_option=None,
                             error_cols=None, error_cols_kind='binary',
                             multiclass_dummies=None, original_sensitive_cols=None,
-                            multicat_table_option='onehot'):
+                            multicat_table_option='onehot', sensitive_gap_test='chi2'):
   """
   Run all experimental conditions using the generic cluster() function.
 
@@ -739,7 +739,8 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
                        distance_matrix=result.distance_matrix,
                        continuous_sensitive_cols=continuous_sensitive_cols,
                        multiclass_option=multiclass_option,
-                       error_cols=error_cols, error_cols_kind=error_cols_kind)
+                       error_cols=error_cols, error_cols_kind=error_cols_kind,
+                       sensitive_gap_test=sensitive_gap_test)
 
     results['cond_name'].append(exp_condition['feature_set_name'][i])
     results['cond_descr'].append(exp_condition['feature_set_descr'][i])

@@ -172,23 +172,29 @@ def _fisher_2x2(a_pos, a_neg, b_pos, b_neg):
         return np.nan
 
 
-def _fisher_2x2_p(df, hi, lo, pos):
-    """Fisher exact p-value for the 2x2 [pos, neg] x [cluster hi, cluster lo] table."""
+def _pair_2x2_p(a_pos, a_neg, b_pos, b_neg, test="fisher"):
+    """2x2 significance p: Fisher exact (default) or chi-square with 0-cell handling."""
+    if test == "chi2":
+        return _chi2_with_zerocell([[a_pos, a_neg], [b_pos, b_neg]])
+    return _fisher_2x2(a_pos, a_neg, b_pos, b_neg)
+
+
+def _fisher_2x2_p(df, hi, lo, pos, test="fisher"):
+    """2x2 [pos, neg] x [cluster hi, cluster lo] significance p (Fisher or chi2)."""
     def counts(cl):
         s = df.loc[df["c"] == cl, "v"]
         p = int((s == pos).sum())
         return p, len(s) - p
     ph, nh = counts(hi)
     pl, nl = counts(lo)
-    return _fisher_2x2(ph, nh, pl, nl)
+    return _pair_2x2_p(ph, nh, pl, nl, test)
 
 
-def extreme_pair_gap_p(values, labels, kind):
+def extreme_pair_gap_p(values, labels, kind, test="fisher"):
     """Overview *_gap_sig: significance of the max gap, comparing ONLY the two
-    clusters that define it (the min- and max-statistic clusters). binary -> Fisher
-    exact 2x2 on the positive value; multicat -> Fisher exact 2x2 on the winning
-    category (largest cross-cluster spread); numeric -> one-way ANOVA. NaN on
-    degenerate input."""
+    clusters that define it (the min- and max-statistic clusters). binary / multicat ->
+    2x2 `test` (Fisher exact, default, or chi-square) on the positive value / winning
+    category; numeric -> one-way ANOVA. NaN on degenerate input."""
     df = pd.DataFrame({"v": pd.Series(values).values, "c": np.asarray(labels)})
     df = df[df["c"] != -1].dropna(subset=["v"])
     clusters = sorted(df["c"].unique())
@@ -211,7 +217,7 @@ def extreme_pair_gap_p(values, labels, kind):
         pos = df["v"].max()
         props = {cl: (df.loc[df["c"] == cl, "v"] == pos).mean() for cl in clusters}
         hi, lo = max(props, key=props.get), min(props, key=props.get)
-        return _fisher_2x2_p(df, hi, lo, pos)
+        return _fisher_2x2_p(df, hi, lo, pos, test)
 
     # multicat: winning category = largest cross-cluster spread; Fisher 2x2 on that
     # category between its two extreme clusters (the same category overview_gap_cat
@@ -226,7 +232,7 @@ def extreme_pair_gap_p(values, labels, kind):
     if best is None:
         return np.nan
     cat, hi, lo = best
-    return _fisher_2x2_p(df, hi, lo, cat)
+    return _fisher_2x2_p(df, hi, lo, cat, test)
 
 
 def onevsall_gap(cluster_vals, rest_vals, kind):
@@ -386,7 +392,7 @@ def _ova_fisher_fdr(table):
     return round(float(np.min(false_discovery_control(ps, method="bh"))), 6)
 
 
-def _categorical_sep_p(values, labels, sig="auto"):
+def _categorical_sep_p(values, labels, sig="auto", prefer_fisher=False):
     """One omnibus separability p for a (value x cluster) categorical table, per `sig`:
       'fisher_rxc'  exact r x c Fisher-Freeman-Halton via R (raises if R absent)
       'chi2'        scipy chi-square with Haldane 0-cell handling
@@ -419,6 +425,8 @@ def _categorical_sep_p(values, labels, sig="auto"):
     if _has_r():
         return fisher_rxc_p(t)
     _warn_no_r_once()
+    if prefer_fisher:                      # binary error 'sep.' is Fisher per spec
+        return _ova_fisher_fdr(t)
     return _chi2_with_zerocell(t) if _cells_adequate(t) else _ova_fisher_fdr(t)
 
 
@@ -440,11 +448,12 @@ def _anova_sep_p(values, labels):
 
 def error_sep_p(values, labels, error_kind, sig="auto"):
     """Overview error 'sep.': one omnibus p across all clusters. Continuous error ->
-    one-way ANOVA; binary / multi-class error -> categorical separability via `sig`
+    one-way ANOVA; binary error -> Fisher (spec) so `auto` prefers exact r x c / one-vs-
+    all Fisher over chi-square; multi-class error -> categorical separability via `sig`
     (see _categorical_sep_p). NaN on degenerate input."""
     if error_kind == "numeric":
         return _anova_sep_p(values, labels)
-    return _categorical_sep_p(values, labels, sig)
+    return _categorical_sep_p(values, labels, sig, prefer_fisher=(error_kind == "binary"))
 
 
 def error_kind_for(error_type, multiclass_option=None):
@@ -525,15 +534,12 @@ def multiclass_error_types(y_true, y_pred, option):
     )
 
 
-def onevsall_gap_p(cluster_vals, rest_vals, kind):
+def onevsall_gap_p(cluster_vals, rest_vals, kind, test="fisher"):
     """Detail *_gap_sig: significance of the one-vs-all (cluster vs rest) gap.
 
-    Per the spec test mapping: numeric -> Mann-Whitney U; binary -> Fisher exact
-    2x2 on the positive value; multicat -> Fisher exact 2x2 on the most divergent
-    category ([winning-cat, other] x [cluster, rest]), i.e. the same category
-    onevsall_gap_cat() reports. NaN if either side is empty. (Binary switched from
-    poisson_means_test to Fisher; multicat from r x c chi2 to a 2x2 Fisher on the
-    winning category, per the redesign spec.)"""
+    numeric -> Mann-Whitney U; binary / multicat -> 2x2 `test` (Fisher exact, default,
+    or chi-square) on [positive / winning-category, other] x [cluster, rest] — the same
+    category onevsall_gap_cat() reports. NaN if either side is empty."""
     cs, rs = pd.Series(cluster_vals).dropna(), pd.Series(rest_vals).dropna()
     if len(cs) == 0 or len(rs) == 0:
         return np.nan
@@ -542,7 +548,7 @@ def onevsall_gap_p(cluster_vals, rest_vals, kind):
     if kind == "binary":
         pos = pd.concat([cs, rs]).max()
         cp, rp = int((cs == pos).sum()), int((rs == pos).sum())
-        return _fisher_2x2(cp, len(cs) - cp, rp, len(rs) - rp)
+        return _pair_2x2_p(cp, len(cs) - cp, rp, len(rs) - rp, test)
     best_cat, best_abs = None, -1.0  # multicat: most divergent category
     for cat in sorted(pd.concat([cs, rs]).unique()):
         d = abs((cs == cat).mean() - (rs == cat).mean())
@@ -551,6 +557,6 @@ def onevsall_gap_p(cluster_vals, rest_vals, kind):
     if best_cat is None:
         return np.nan
     cp, rp = int((cs == best_cat).sum()), int((rs == best_cat).sum())
-    return _fisher_2x2(cp, len(cs) - cp, rp, len(rs) - rp)
+    return _pair_2x2_p(cp, len(cs) - cp, rp, len(rs) - rp, test)
 
 

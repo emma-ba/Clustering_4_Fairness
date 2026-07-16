@@ -203,6 +203,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         multiclass_dummies=multiclass_dummies,
         original_sensitive_cols=original_sensitive_cols,
         multicat_table_option=args.multicat_table_option,
+        sensitive_gap_test=args.sensitive_gap_test,
     )
 
     # Print progress for each condition
@@ -245,7 +246,8 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                                     error_type=args.error_type,
                                     multiclass_option=args.error_multiclass_option,
                              error_cols=args.error_cols,
-                             error_cols_kind=args.error_cols_kind)
+                             error_cols_kind=args.error_cols_kind,
+                             sensitive_gap_test=args.sensitive_gap_test)
 
     slabels = parse_label_map(getattr(args, 'sensitive_labels', None))
     if not args.no_plots:

@@ -378,6 +378,15 @@ def parse_args():
         "distance/encoding.",
     )
     parser.add_argument(
+        "--sensitive_gap_test",
+        type=str,
+        default="chi2",
+        choices=["chi2", "fisher"],
+        help="Significance test for the sensitive-feature gap columns (<F>_gap_sig). "
+        "'chi2' (default, per spec) or 'fisher' (exact 2x2). Error gap significance stays "
+        "Fisher; numeric sensitive features use Mann-Whitney/ANOVA regardless.",
+    )
+    parser.add_argument(
         "--multicat_sig",
         type=str,
         default="auto",

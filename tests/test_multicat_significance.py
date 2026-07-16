@@ -52,6 +52,41 @@ def test_error_sep_auto_falls_back_to_scipy_without_r(monkeypatch):
     assert np.isfinite(p) and p < 0.05  # perfectly separated -> significant
 
 
+def test_onevsall_gap_p_binary_chi2_matches_chi2():
+    from c4f.fairness_metrics import onevsall_gap_p, _chi2_with_zerocell
+    cs, rs = [1] * 8 + [0] * 2, [1] * 3 + [0] * 7
+    assert onevsall_gap_p(cs, rs, "binary", test="chi2") == _chi2_with_zerocell([[8, 2], [3, 7]])
+
+
+def test_onevsall_gap_p_binary_fisher_is_default():
+    from c4f.fairness_metrics import onevsall_gap_p, _fisher_2x2
+    cs, rs = [1] * 8 + [0] * 2, [1] * 3 + [0] * 7
+    assert onevsall_gap_p(cs, rs, "binary") == _fisher_2x2(8, 2, 3, 7)
+
+
+def test_extreme_pair_gap_p_chi2_option_finite():
+    vals = pd.Series([1] * 8 + [0] * 2 + [1] * 3 + [0] * 7)
+    lab = np.array([0] * 10 + [1] * 10)
+    p = extreme_pair_gap_p_import()(vals, lab, "binary", test="chi2")
+    assert np.isfinite(p)
+
+
+def extreme_pair_gap_p_import():
+    from c4f.fairness_metrics import extreme_pair_gap_p
+    return extreme_pair_gap_p
+
+
+def test_error_sep_binary_prefers_fisher_without_r(monkeypatch):
+    import c4f.fairness_metrics as fm
+    monkeypatch.setattr(fm, "_has_r", lambda: False)
+    err = pd.Series([1] * 8 + [0] * 2 + [1] * 3 + [0] * 7)
+    lab = np.array([0] * 10 + [1] * 10)
+    tbl = pd.crosstab(err, pd.Series(lab)).values
+    # binary error 'sep.' uses the Fisher (one-vs-all) path, not chi-square
+    assert fm.error_sep_p(err, lab, "binary") == fm._ova_fisher_fdr(tbl)
+    assert fm._ova_fisher_fdr(tbl) != fm._chi2_with_zerocell(tbl)
+
+
 def test_error_sep_numeric_still_anova(monkeypatch):
     # sig choice must not touch the numeric (ANOVA) path.
     import c4f.fairness_metrics as fm

@@ -122,6 +122,12 @@ def test_build_cmd_binary_raw_still_uses_error_col():
     assert "--error_col" in c and "--binary_error_metric" not in c
 
 
+def test_build_cmd_sensitive_gap_test():
+    assert _base(sensitive_gap_test="fisher")[
+        _base(sensitive_gap_test="fisher").index("--sensitive_gap_test") + 1] == "fisher"
+    assert "--sensitive_gap_test" in _base()  # always emitted (default chi2)
+
+
 def test_build_cmd_sensitive_labels():
     c = _base(sensitive_labels="race:Ethnicity,sex_Male:Male")
     assert c[c.index("--sensitive_labels") + 1] == "race:Ethnicity,sex_Male:Male"

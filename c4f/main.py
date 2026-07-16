@@ -475,6 +475,7 @@ def main():
             multiclass_option=args.error_multiclass_option,
             error_cols=args.error_cols,
             error_cols_kind=args.error_cols_kind,
+            sensitive_gap_test=args.sensitive_gap_test,
         )
 
         # Save recap CSV

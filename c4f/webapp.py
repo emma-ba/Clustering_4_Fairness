@@ -1,11 +1,7 @@
 """
 Gradio web UI for c4f experiment mode.
 
-ponytail: drives the existing `c4f` CLI via subprocess instead of an in-process
-API — the CLI already does all validation + output writing, so the UI is just a
-form + a results gallery. Swap to in-process if subprocess startup ever matters.
 
-NOTE: experiment mode's omnibus error test needs rpy2 + R (>= 4.5) on the host.
 Install the extra:  pip install c4f[web]   (and have R available).
 Launch:  c4f-web
 """
@@ -34,19 +30,8 @@ is used automatically.*
 DOC_MD = """
 ## Documentation
 
-**Discover where a model's errors fall unevenly.** `c4fairness` clusters the rows of a
-model's test set and reports how prediction-error disparities and sensitive-attribute
-composition vary across the discovered clusters — surfacing under-served subgroups
-*without* pre-specifying the protected group.
 
-**Motivation.** Aggregate accuracy hides localized harm: a model can look fair on average
-yet fail a specific intersection of groups. Unsupervised clustering of the test set exposes
-those pockets and quantifies the disparity with proper significance tests.
 
-**Made at Vrije Universiteit Amsterdam (VU), in collaboration with the University of
-Twente (UT).**
-
-### Workflow
 1. **Upload** a CSV where each row is one test-set example (features + the model's outputs).
 2. **Columns** — assign roles (below).
 3. **Error** — tell the app how to read the model's mistakes.
@@ -88,12 +73,20 @@ Worked examples: `docs/example_binary.ipynb`, `docs/example_regression.ipynb` ar
 ABOUT_MD = """
 ## About
 
-**c4fairness** clusters a model's test set to surface where prediction errors fall
-unevenly across sensitive-attribute subgroups — *without* pre-specifying the protected
-group. See the **Documentation** page for how to use it.
+**Discover where a model's errors fall unevenly.** `c4fairness` clusters the rows of a
+model's test set and reports how prediction-error disparities and sensitive-attribute
+composition vary across the discovered clusters — surfacing under-served subgroups
+*without* pre-specifying the protected group.
+
+**Motivation.** Aggregate accuracy hides localized harm: a model can look fair on average
+yet fail a specific intersection of groups. Unsupervised clustering of the test set exposes
+those pockets and quantifies the disparity with proper significance tests.
+
+**Made at Vrije Universiteit Amsterdam (VU), in collaboration with the University of
+Twente (UT).**
 
 ### Project
-- **Package:** `c4fairness` (v0.1.1) — `pip install c4fairness`
+- **Package:** [`c4fairness`](https://pypi.org/project/c4fairness/) (v0.1.1) — `pip install c4fairness`
 - **Source:** <https://github.com/emma-ba/Clustering_4_Fairness>
 
 ### Authors
@@ -125,6 +118,7 @@ def _build_cmd(
     max_iter=300,
     multicat_sig="auto",
     multicat_table_option="onehot",
+    sensitive_gap_test="chi2",
     continuous_sensitive="",
     proxy="",
     special="",
@@ -165,6 +159,8 @@ def _build_cmd(
         multicat_sig,
         "--multicat_table_option",
         multicat_table_option,
+        "--sensitive_gap_test",
+        sensitive_gap_test,
         "--projection",
         projection,
     ]
@@ -268,6 +264,7 @@ def _run(
     max_iter,
     multicat_table_option,
     multicat_sig,
+    sensitive_gap_test,
     continuous_sensitive,
     proxy,
     special,
@@ -310,6 +307,7 @@ def _run(
         max_iter=max_iter,
         multicat_sig=multicat_sig,
         multicat_table_option=multicat_table_option,
+        sensitive_gap_test=sensitive_gap_test,
         continuous_sensitive=_csv1(continuous_sensitive),
         proxy=_csv1(proxy),
         special=_csv1(special),
@@ -465,6 +463,11 @@ def _build():
                     label="Multi-cat significance test",
                     info="'auto'/'fisher_rxc' use R if installed; others are scipy-only",
                 )
+                sensitive_gap_test = gr.Dropdown(
+                    ["chi2", "fisher"], value="chi2",
+                    label="Sensitive gap-sig test",
+                    info="Test for <F>_gap_sig; error gap-sig stays Fisher",
+                )
             exclude = gr.Textbox(
                 label="Exclude groups from conditions", placeholder="e.g. SPECIAL,ERR"
             )
@@ -571,6 +574,7 @@ def _build():
                 max_iter,
                 multicat_table_option,
                 multicat_sig,
+                sensitive_gap_test,
                 continuous_sensitive,
                 proxy,
                 special,
