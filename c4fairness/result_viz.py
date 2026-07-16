@@ -225,6 +225,8 @@ def render_result_heatmap(
         ax.set_xticklabels(labels, rotation=45, ha="left", rotation_mode="anchor")
         ax.set(xlabel="", ylabel="")
 
+    # Row (cluster) labels: horizontal + centered so they don't cramp/overlap.
+    axes[0].set_yticklabels(axes[0].get_yticklabels(), rotation=0, va="center")
     for ax in axes[1:]:
         ax.set_yticklabels([])
 

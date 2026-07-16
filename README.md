@@ -1,5 +1,8 @@
 # Clustering 4 Fairness
 
+[![PyPI version](https://img.shields.io/pypi/v/c4fairness.svg)](https://pypi.org/project/c4fairness/)
+[![Python versions](https://img.shields.io/pypi/pyversions/c4fairness.svg)](https://pypi.org/project/c4fairness/)
+
 Cluster data points and analyze whether prediction errors or sensitive attributes are distributed unevenly across clusters. Supports both classification (binary error) and regression (signed error) tasks.
 
 ---
@@ -23,6 +26,33 @@ c4f --data_path Data/compas/Compas_error_shap.csv \
 `c4f` and `python main.py` are identical — same arguments, same output. The installed package is an editable install pointing at this repo, so any local changes take effect immediately without reinstalling.
 
 > **Note:** This setup (`pip install -e .`) is intended for local research use. Publishing to PyPI would require renaming `src/` to avoid package name conflicts and making the CLI entry point self-contained.
+
+---
+
+## Web UI
+
+A [Gradio](https://www.gradio.app/) web app wraps experiment mode: upload a CSV, assign column roles, and run from the browser. Results (heatmaps, an overview table, and downloadable CSVs) render in tabs, and a top navbar links **Home**, **Documentation**, and **About** pages.
+
+### Install
+
+```bash
+pip install "c4fairness[web]"     # from PyPI
+pip install -e ".[web]"           # from a local checkout
+```
+
+The `web` extra pulls in `gradio` and `rpy2`.
+
+### Prerequisites
+
+- **R ≥ 4.5** *(optional)* — enables exact r×c Fisher for multi-categorical significance (`--multicat_sig auto`/`fisher_rxc`). Without R, the app falls back to scipy (chi-square / one-vs-all Fisher) automatically. See the [Experiment mode — R + rpy2](#experiment-mode--r--rpy2) section for macOS setup notes.
+
+### Launch
+
+```bash
+c4fairness-web
+```
+
+Then open the printed local URL (default http://localhost:7860).
 
 ---
 
