@@ -27,6 +27,7 @@ def reduce_dimensions(
     n_components: int = 2,
     random_state: int = 42,
     precomputed: bool = False,
+    metric: str = "euclidean",
 ) -> np.ndarray:
     """
     Reduce a feature matrix (or precomputed distance matrix) to 2D for visualization.
@@ -54,11 +55,19 @@ def reduce_dimensions(
     if method == "pca":
         reducer = PCA(n_components=n_components, random_state=random_state)
     elif method == "tsne":
-        reducer = TSNE(
-            n_components=n_components,
-            random_state=random_state,
-            perplexity=30,
-        )
+        # perplexity must be < n_samples; clamp so small cluster sets don't raise.
+        perplexity = min(30, max(2, X.shape[0] - 1))
+        kw = dict(n_components=n_components, random_state=random_state,
+                  perplexity=perplexity)
+        if precomputed:
+            # Same distance as clustering (e.g. precomputed Gower matrix).
+            kw.update(metric="precomputed", init="random")
+        else:
+            if metric != "euclidean":
+                kw.update(metric=metric)   # e.g. manhattan, matching the cluster distance
+            if X.shape[1] < 2:
+                kw.update(init="random")   # default 'pca' init needs >= 2 features
+        reducer = TSNE(**kw)
     elif method == "mds":
         dissimilarity = "precomputed" if precomputed else "euclidean"
         reducer = MDS(

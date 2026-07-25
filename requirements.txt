@@ -7,3 +7,4 @@ scikit-learn
 scikit-learn-extra
 hdbscan
 kmodes
+rpy2

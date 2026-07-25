@@ -3,10 +3,27 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "c4f"
-version = "0.1.0"
+name = "c4fairness"
+version = "0.1.1"
 description = "Cluster ML model outputs and analyze prediction error disparities across demographic groups"
+readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+    { name = "Filip Muntean", email = "filip.mihai.muntean@gmail.com" },
+    { name = "Emma Beauxis-Aussalet", email = "e.m.a.l.beauxisaussalet@vu.nl" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development",
+]
 dependencies = [
     "numpy",
     "pandas",
@@ -14,14 +31,28 @@ dependencies = [
     "matplotlib",
     "seaborn",
     "scikit-learn",
-    "scikit-learn-extra",
     "hdbscan",
     "kmodes",
 ]
 
+[project.urls]
+Homepage = "https://github.com/emma-ba/Clustering_4_Fairness"
+Source = "https://github.com/emma-ba/Clustering_4_Fairness"
+
+[project.optional-dependencies]
+# Exact r x c Fisher (--multicat_sig auto/fisher_rxc) uses R's fisher.test via rpy2.
+# Needs a system R >= 4.5; without it the package falls back to scipy (chi-square /
+# one-vs-all Fisher). Prerequisite for exact Fisher on multi-categorical features.
+r = ["rpy2"]
+experiment = ["rpy2"]
+web = ["gradio", "rpy2"]
+# scikit-learn-extra (KMedoids) has no numpy-2 wheels; only needed for --algorithm kmedoids.
+kmedoids = ["scikit-learn-extra"]
+
 [project.scripts]
-c4f = "c4f.main:main"
+c4fairness = "c4fairness.main:main"
+c4fairness-web = "c4fairness.webapp:launch"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["c4f*", "src*"]
+include = ["c4fairness*"]
