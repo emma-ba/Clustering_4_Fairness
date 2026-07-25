@@ -9,13 +9,15 @@ Launch:  c4fairness-web
 import os
 import sys
 import glob
+import signal
+import shutil
 import tempfile
 import subprocess
 import pandas as pd
 
 # gradio imported lazily inside launch() so _build_cmd stays testable without it.
 
-RUN_TIMEOUT_S = int(os.environ.get("C4F_WEB_TIMEOUT", "300"))  # per-run cap; override via env
+RUN_TIMEOUT_S = int(os.environ.get("C4F_WEB_TIMEOUT", "3000"))  # per-run cap; override via env
 
 
 HOME_MD = """
@@ -23,9 +25,6 @@ HOME_MD = """
 
 Upload a CSV, choose your columns, and run. Results (heatmaps + tables) appear in the tabs
 below. See the **Documentation** page (top navbar) for column roles and options.
-
-*Exact multi-categorical Fisher needs R ≥ 4.5 + `c4fairness[r]`; otherwise a scipy fallback
-is used automatically.*
 """
 
 
@@ -176,7 +175,7 @@ def _build_cmd(
         cmd += ["--eps", str(eps)]
     if algorithm in ("dbscan", "hdbscan"):
         cmd += ["--min_samples", str(int(min_samples))]
-    if algorithm in ("kmeans", "bisectingkmeans", "kmedoids"):
+    if algorithm in ("kmeans", "bisectingkmeans", "kmedoids", "kprototypes"):
         cmd += ["--max_iter", str(int(max_iter))]
     if seeds:
         cmd += ["--seeds", seeds]
@@ -288,6 +287,23 @@ def _run(
 ):
     if file is None:
         return "Upload a CSV first.", [], [], None
+    # Validate required column pickers up front — an empty flag otherwise reaches the
+    # subprocess as e.g. `--error_col ""` and fails with a cryptic log message.
+    if error_type == "binary":
+        if binary_error_metric == "raw" and not _csv1(error_col):
+            return "Pick an Error column (or a metric that derives from y_true/y_pred).", [], [], None
+        if binary_error_metric != "raw" and not (_csv1(y_true) and _csv1(y_pred)):
+            return f"'{binary_error_metric}' needs both y_true and y_pred columns.", [], [], None
+    elif error_type == "regression":
+        if not _csv1(error_col) and not (_csv1(y_true) and _csv1(y_pred)):
+            return "Regression needs an Error column, or both y_true and y_pred.", [], [], None
+    else:  # multiclass
+        if not (_csv1(y_true) and _csv1(y_pred)):
+            return "Multiclass needs both y_true and y_pred columns.", [], [], None
+    # ponytail: single-user demo — clear prior run dirs so disk doesn't grow unbounded.
+    # If concurrent runs ever matter, switch to per-run TTL cleanup instead.
+    for d in glob.glob(os.path.join(tempfile.gettempdir(), "c4f_web_*")):
+        shutil.rmtree(d, ignore_errors=True)
     out_dir = tempfile.mkdtemp(prefix="c4f_web_")
     cmd = _build_cmd(
         file.name,
@@ -329,17 +345,29 @@ def _run(
         no_standardize=bool(no_standardize),
         projection=(projection or "tsne"),
     )
+    # ponytail: hard cap so a runaway run can't hang the queue on a public demo.
+    # start_new_session puts the child in its own process group so on timeout we can
+    # SIGKILL the whole group — otherwise grandchildren (matplotlib, etc.) can orphan.
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
     try:
-        # ponytail: hard cap so a runaway run can't hang the queue on a public demo.
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=RUN_TIMEOUT_S)
-    except subprocess.TimeoutExpired as e:
-        partial = (e.stdout or "") + (e.stderr or "")
+        out, err = proc.communicate(timeout=RUN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        out, err = proc.communicate()
         return (
-            f"{partial}\n\nRun exceeded {RUN_TIMEOUT_S // 60} min and was stopped. "
-            "Try fewer rows, a smaller k range, or a simpler algorithm.",
+            f"{(out or '') + (err or '')}\n\nRun exceeded {RUN_TIMEOUT_S // 60} min and "
+            "was stopped. Try fewer rows, a smaller k range, or a simpler algorithm.",
             [], [], None,
         )
-    log = (proc.stdout or "") + (proc.stderr or "")
+    log = (out or "") + (err or "")
+    if proc.returncode != 0:
+        log = f"⚠ run exited with code {proc.returncode}\n\n" + log
     # run_batch_experiment writes into out_dir/<timestamp>_experiment_.../
     runs = sorted(glob.glob(os.path.join(out_dir, "*experiment*")))
     base = runs[-1] if runs else out_dir
@@ -533,8 +561,10 @@ def _build():
                     categorical_cols, error_col, y_true, y_pred]
 
         def _fill(f):
+            # Reset value too — otherwise a re-upload keeps selections pointing at the
+            # previous CSV's columns.
             cols = _cols(f.name) if f else []
-            return [gr.update(choices=cols) for _ in range(len(_pickers))]
+            return [gr.update(choices=cols, value=None) for _ in range(len(_pickers))]
 
         file.change(_fill, inputs=file, outputs=_pickers)
 
@@ -557,7 +587,7 @@ def _build():
             return (
                 gr.update(visible=a == "dbscan"),                          # eps
                 gr.update(visible=a in ("dbscan", "hdbscan")),             # min_samples
-                gr.update(visible=a in ("kmeans", "bisectingkmeans", "kmedoids")),  # max_iter
+                gr.update(visible=a in ("kmeans", "bisectingkmeans", "kmedoids", "kprototypes")),  # max_iter
             )
 
         algorithm.change(
@@ -662,6 +692,10 @@ def _selfcheck():
     assert "--y_true_col" in c and "yt" in c and "classwise" in c
     assert "--error_col" not in c
     assert c[c.index("--experiment") + 1] == "SPECIAL"
+    # kprototypes gets --max_iter like the rest of the kmeans family
+    c = _build_cmd("d.csv", "/out", "age", "race", "binary", "err", "", "", "per_class",
+                   "kprototypes", "gower", 4, 42, "")
+    assert "--max_iter" in c
     print("webapp selfcheck OK")
 
 
