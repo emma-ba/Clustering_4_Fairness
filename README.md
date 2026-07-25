@@ -19,7 +19,7 @@ Twente (UT)**.
 ```bash
 pip install c4fairness              # from PyPI
 pip install "c4fairness[web]"       # + the Gradio web UI
-pip install "c4fairness[r]"         # + rpy2 (exact r×c Fisher; also needs a system R ≥ 4.5)
+pip install "c4fairness[r]"         # + rpy2 
 ```
 
 Or from a local checkout (editable, for development):

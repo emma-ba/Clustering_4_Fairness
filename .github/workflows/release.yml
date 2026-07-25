@@ -1,0 +1,65 @@
+name: Release to PyPI
+
+# Manual only — never fires on push. A maintainer triggers it from the Actions tab
+# or with:  gh workflow run release.yml -f version=0.1.2
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.1.2"
+        required: true
+
+permissions:
+  contents: write   # commit the version bump + push the tag
+  id-token: write   # OIDC token for PyPI Trusted Publishing (no API token needed)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Gate: publishing only proceeds through this environment. Protect it in
+    # Settings > Environments > "pypi" with Required reviewers so a release waits
+    # for approval, and scope the PyPI trusted publisher to environment "pypi".
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set version in pyproject.toml
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          v = os.environ["VERSION"].strip()
+          assert re.fullmatch(r"\d+\.\d+\.\d+([abrc]\d+|\.dev\d+|\.post\d+)?", v), f"bad version {v!r}"
+          p = pathlib.Path("pyproject.toml")
+          s = p.read_text()
+          s2, n = re.subn(r'(?m)^version\s*=\s*".*"$', f'version = "{v}"', s, count=1)
+          assert n == 1, "no project `version = \"...\"` line found in pyproject.toml"
+          p.write_text(s2)
+          print(f"pyproject.toml version -> {v}")
+          PY
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      # Publishes everything in dist/ via Trusted Publishing. This is the irreversible
+      # step (PyPI rejects a version it already has), so it runs before the git tag.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Commit bump + tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "release v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin HEAD --tags
