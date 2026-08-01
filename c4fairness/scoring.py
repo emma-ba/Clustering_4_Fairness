@@ -25,7 +25,7 @@ def silhouette_scorer(X: np.ndarray, labels: np.ndarray) -> float:
     non_noise = labels != -1
     if non_noise.sum() <= n_clusters:
         return -1.0
-    # Detect precomputed distance matrix: square, same size as labels, all non-negative
+    # Heuristic: a square, non-negative matrix sized to labels is a distance matrix.
     if (
         X.ndim == 2
         and X.shape[0] == X.shape[1]
@@ -61,11 +61,12 @@ def make_chi2_error_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        err = (
-            data[non_noise]
-            if len(data) == len(labels)
-            else data[: len(labels)][non_noise]
-        )
+        if len(data) != len(labels):
+            raise ValueError(
+                f"data length ({len(data)}) does not match labels length ({len(labels)}). "
+                "Ensure the mask is applied to the data before passing it to the scorer."
+            )
+        err = data[non_noise]
         lab = labels[non_noise]
         # Build contingency: rows = [correct, error], cols = clusters
         unique_labels = sorted(set(lab))
@@ -74,12 +75,11 @@ def make_chi2_error_scorer(
             cl_mask = lab == cl
             table[1, j] = int(err[cl_mask].sum())
             table[0, j] = int(cl_mask.sum()) - table[1, j]
-        # Avoid degenerate tables
         if table.sum() == 0 or (table == 0).all(axis=1).any():
             return 0.0
         try:
             _, p, _, _ = chi2_contingency(table)
-            return 1.0 - p  # higher = better error separation
+            return 1.0 - p
         except ValueError:
             return 0.0
 
@@ -110,21 +110,21 @@ def make_kruskal_error_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        err = (
-            data[non_noise]
-            if len(data) == len(labels)
-            else data[: len(labels)][non_noise]
-        )
+        if len(data) != len(labels):
+            raise ValueError(
+                f"data length ({len(data)}) does not match labels length ({len(labels)}). "
+                "Ensure the mask is applied to the data before passing it to the scorer."
+            )
+        err = data[non_noise]
         lab = labels[non_noise]
         unique_labels = sorted(set(lab))
         groups = [err[lab == cl] for cl in unique_labels]
-        # Need at least 2 non-empty groups
         groups = [g for g in groups if len(g) > 0]
         if len(groups) < 2:
             return 0.0
         try:
             _, p = kruskal(*groups)
-            return 1.0 - p  # higher = better error separation
+            return 1.0 - p
         except ValueError:
             return 0.0
 
@@ -158,11 +158,12 @@ def make_categorical_error_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        err = (
-            data[non_noise]
-            if len(data) == len(labels)
-            else data[: len(labels)][non_noise]
-        )
+        if len(data) != len(labels):
+            raise ValueError(
+                f"data length ({len(data)}) does not match labels length ({len(labels)}). "
+                "Ensure the mask is applied to the data before passing it to the scorer."
+            )
+        err = data[non_noise]
         lab = labels[non_noise]
         categories = sorted(set(err))
         unique_labels = sorted(set(lab))
@@ -176,7 +177,7 @@ def make_categorical_error_scorer(
             return 0.0
         try:
             _, p, _, _ = chi2_contingency(table)
-            return 1.0 - p  # higher = better error separation
+            return 1.0 - p
         except ValueError:
             return 0.0
 
@@ -207,11 +208,12 @@ def make_chi2_sensitive_scorer(
         if n_clusters < 2:
             return 0.0
         non_noise = labels != -1
-        sens = (
-            data[non_noise]
-            if len(data) == len(labels)
-            else data[: len(labels)][non_noise]
-        )
+        if len(data) != len(labels):
+            raise ValueError(
+                f"data length ({len(data)}) does not match labels length ({len(labels)}). "
+                "Ensure the mask is applied to the data before passing it to the scorer."
+            )
+        sens = data[non_noise]
         lab = labels[non_noise]
         unique_vals = sorted(set(sens))
         unique_labels = sorted(set(lab))
@@ -266,13 +268,11 @@ def make_composite_scorer(
         'binary' for chi2-based error scorer, 'regression' for Kruskal-Wallis,
         'multiclass' for the categorical (r x c chi2) error scorer.
     """
-    # Zero out weights for missing components
     if error_data is None:
         error_weight = 0.0
     if sensitive_data is None:
         fairness_weight = 0.0
 
-    # Normalize weights to sum to 1
     total = silhouette_weight + error_weight + fairness_weight
     if total <= 0:
         silhouette_weight, error_weight, fairness_weight = 1.0, 0.0, 0.0

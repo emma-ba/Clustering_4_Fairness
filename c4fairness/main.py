@@ -5,10 +5,8 @@ import re
 import numpy as np
 import pandas as pd
 from scipy.stats import combine_pvalues
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
 from datetime import datetime
-from c4fairness.clustering import cluster, gower_distance
+from c4fairness.clustering import cluster
 from c4fairness.scoring import (
     make_chi2_error_scorer,
     make_kruskal_error_scorer,
@@ -24,11 +22,10 @@ from c4fairness.cli import (
     parse_args,
     parse_column_list,
     parse_feature_weights,
-    _build_sensitive_analysis_list,
+    build_sensitive_analysis_list,
     apply_salient_reconstruction,
     parse_projection_list,
     parse_label_map,
-    OUTPUT_DIR,
 )
 from c4fairness.experiment import run_batch_experiment
 
@@ -53,7 +50,6 @@ def main():
     session_date = datetime.now().strftime("%Y-%m-%d")
     dataset_name = os.path.splitext(os.path.basename(args.data_path))[0]
 
-    # Block subset for regression (TP/TN/FP/FN doesn't apply)
     if args.error_type == "regression" and args.subset:
         raise ValueError(
             "--subset (TP/TN/FP/FN) is not compatible with --error_type regression. "
@@ -168,7 +164,6 @@ def main():
                 print(f"{'='*60}")
                 seed_dir = os.path.join(base_output_dir, f"seed_{seed}")
                 os.makedirs(seed_dir, exist_ok=True)
-                # Save per-seed metadata
                 metadata = pd.DataFrame(
                     [
                         {
@@ -185,14 +180,12 @@ def main():
                 args.seed = seed
                 run_batch_experiment(df, args, seed_dir)
 
-                # Collect chi_res for summary
                 chi_path = os.path.join(seed_dir, "chi_res.csv")
                 if os.path.exists(chi_path):
                     chi_df = pd.read_csv(chi_path)
                     chi_df["seed"] = seed
                     all_chi_res.append(chi_df)
 
-            # Generate cross-seed summary
             if all_chi_res:
                 combined = pd.concat(all_chi_res, ignore_index=True)
                 p_value_cols = [
@@ -264,7 +257,6 @@ def main():
     output_dir = os.path.join(args.output_dir, run_id)
     os.makedirs(output_dir, exist_ok=True)
 
-    # Save metadata
     scoring_method = getattr(args, "scoring", "silhouette")
     metadata = pd.DataFrame(
         [
@@ -315,13 +307,12 @@ def main():
     proxy_cols = col_lists["proxy"]
     special_cols = col_lists["special"]
 
-    # Fairness-analysis sensitive list (see _build_sensitive_analysis_list).
-    sensitive_cols_analysis = _build_sensitive_analysis_list(
+    # Fairness-analysis sensitive list (see build_sensitive_analysis_list).
+    sensitive_cols_analysis = build_sensitive_analysis_list(
         sensitive_cols, multiclass_dummies, original_sensitive_cols,
         option=args.multicat_table_option,
     )
 
-    # Build clustering features
     clustering_cols = regular_cols + sensitive_cols + proxy_cols + special_cols
     features = df[clustering_cols] if clustering_cols else df
 
@@ -333,7 +324,6 @@ def main():
         i for i, c in enumerate(clustering_cols) if c in ohe_col_set
     ] or None
 
-    # Parse feature weights
     feature_weights = parse_feature_weights(
         args.feature_weights,
         regular_cols,
@@ -405,18 +395,10 @@ def main():
             )
         # else: no error_col or sensitive_cols -> scoring_fn stays None -> silhouette fallback
 
-    # Run clustering
     print(f"\nClustering...")
     print(f"  Algorithm: {args.algorithm}")
     print(f"  Distance: {args.distance}")
     print(f"  Scoring: {args.scoring}")
-
-    # Validate algorithm + distance combinations
-    if args.algorithm == "kprototypes" and args.distance == "gower":
-        print(
-            "Warning: KPrototypes uses its own distance metric. --distance gower is ignored."
-        )
-        print("For Gower-based clustering, use DBSCAN or HDBSCAN instead.")
 
     result = cluster(
         features=features,
@@ -440,7 +422,6 @@ def main():
         ohe_features=ohe_feature_indices,
     )
 
-    # Results
     print(f"\nResults:")
     print(f"  Clusters: {result.n_clusters}")
     print(f"  Noise: {result.n_noise}")
@@ -478,14 +459,12 @@ def main():
             sensitive_gap_test=args.sensitive_gap_test,
         )
 
-        # Save recap CSV
         recap_dir = os.path.join(output_dir, "recap")
         os.makedirs(recap_dir, exist_ok=True)
         run_name = f"{args.algorithm}_{args.distance}_k{result.n_clusters}"
         recap.to_csv(os.path.join(recap_dir, f"{run_name}.csv"), index=False)
         print(f"\nSaved: recap/{run_name}.csv")
 
-        # Save recap heatmap
         if not args.no_plots and len(recap) > 1:
             error_label = (
                 getattr(args, "error_label", None) or args.error_col or "error"
@@ -496,7 +475,7 @@ def main():
             )
             print(f"Saved: {run_name}.png")
 
-    # Separability check (chi-squared for categorical, Kruskal-Wallis for numeric)
+    # chi-square for categorical; Mann-Whitney (2 clusters) / Kruskal-Wallis (3+) for numeric
     df_for_sep = df if result.mask is None else df[result.mask]
     all_cols_to_test = list(dict.fromkeys(clustering_cols + sensitive_cols))
     if result.n_clusters > 1:
@@ -514,7 +493,6 @@ def main():
         print("\nSeparability check:")
         print("  Not enough clusters for separability analysis")
 
-    # Visualization
     if not args.no_plots:
         methods = parse_projection_list(args.projection)
         print(f"\nGenerating visualizations ({', '.join(methods) or 'none'})...")
@@ -551,9 +529,13 @@ def main():
                 out_path=f"{output_dir}/clusters_{method}.png",
             )
 
-        # Plot composition for each sensitive attribute
+        # Composition bar chart per sensitive attribute. Continuous attributes are
+        # skipped: one stacked band per distinct value turns e.g. `age` into a
+        # 60-entry legend that costs more to lay out than the rest of the run.
         if sensitive_cols:
             for attr_name in sensitive_cols:
+                if attr_name in continuous_sensitive_cols:
+                    continue
                 attr_for_eval = df[attr_name].values
                 if result.mask is not None:
                     attr_for_eval = attr_for_eval[result.mask]

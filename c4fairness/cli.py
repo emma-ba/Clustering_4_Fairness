@@ -41,7 +41,6 @@ def parse_feature_weights(
             continue
         name, w = parts[0].strip(), float(parts[1].strip())
 
-        # Check if it's a group name
         if name == "regular":
             for col in regular_cols:
                 weights[col] = w
@@ -52,7 +51,6 @@ def parse_feature_weights(
             for col in special_cols:
                 weights[col] = w
         else:
-            # Individual column
             if name in all_cols:
                 weights[name] = w
 
@@ -75,7 +73,7 @@ def parse_projection_list(s):
     return [] if "none" in methods else methods
 
 
-def _build_sensitive_analysis_list(
+def build_sensitive_analysis_list(
     sensitive_cols, multiclass_dummies, original_sensitive_cols, option="onehot"
 ):
     """Which sensitive columns the result tables analyze.
@@ -139,10 +137,11 @@ def parse_args():
             "kmedoids",
             "kprototypes",
         ],
-        help="Clustering algorithm",
+        help="Clustering algorithm. kmedoids additionally requires scikit-learn-extra, "
+        "which has no wheels for numpy >= 2 and will raise on a modern install; "
+        "use hdbscan with --distance gower for mixed-type data instead.",
     )
 
-    # Distance metric
     parser.add_argument(
         "--distance",
         type=str,
@@ -170,7 +169,6 @@ def parse_args():
         help="Maximum number of clusters (for range-based k search)",
     )
 
-    # DBSCAN parameters
     parser.add_argument(
         "--eps",
         type=float,
@@ -178,14 +176,12 @@ def parse_args():
         help="Maximum distance between samples for neighborhood (DBSCAN)",
     )
 
-    # HDBSCAN parameters
     parser.add_argument(
         "--min_samples",
         type=int,
         default=5,
         help="HDBSCAN/DBSCAN only: minimum samples in a neighborhood for a point to be a core point.",
     )
-    # General parameters
     parser.add_argument(
         "--seed",
         type=int,
@@ -199,7 +195,6 @@ def parse_args():
         help="Comma-separated seeds for multi-seed experiments (e.g., '42,123,456'). Mutually exclusive with --seed in experiment mode.",
     )
 
-    # KMeans parameters
     parser.add_argument(
         "--max_iter",
         type=int,
@@ -207,7 +202,6 @@ def parse_args():
         help="Maximum iterations for KMeans/BisectingKMeans",
     )
 
-    # Scoring method for k-selection
     parser.add_argument(
         "--scoring",
         type=str,
@@ -222,7 +216,6 @@ def parse_args():
         help="Weights for composite scoring as 'silhouette:W,error:W,fairness:W'. Accepts any value in [0, Inf); weights are normalized to sum to 1.",
     )
 
-    # Feature weights
     parser.add_argument(
         "--feature_weights",
         type=str,
@@ -237,7 +230,6 @@ def parse_args():
         help="Minimum cluster size. For HDBSCAN: enforced natively during extraction. For all other algorithms: post-hoc filter (small clusters become noise).",
     )
 
-    # Statistical tests
     parser.add_argument(
         "--separability_check",
         action="store_true",
@@ -256,7 +248,6 @@ def parse_args():
         default=None,
         help="Column name for predicted labels (for subset filtering)",
     )
-    # Subset analysis
     parser.add_argument(
         "--subset",
         type=str,
@@ -265,7 +256,6 @@ def parse_args():
         help="Analyze only this confusion matrix subset (TP_TN=correct predictions, FP_FN=errors)",
     )
 
-    # Projection method
     parser.add_argument(
         "--projection",
         type=str,
@@ -277,27 +267,20 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--max_composition_plots",
+        type=int,
+        default=0,
+        help="Cap on composition bar plots in experiment mode (conditions x sensitive "
+        "attributes, which grows fast). 0 = no cap. Default: 0.",
+    )
+
+    parser.add_argument(
         "--regular_cols",
         type=str,
         default=None,
         help="Regular features for clustering (comma-separated column names)",
     )
-    # TODO: Side-by-side comparison of Euclidean vs Gower clustering results — for the same k, show cluster proportions, error separation (chi2/KW), and sensitive feature distribution per cluster for both distances. Helps assess whether Gower adds value over standard Euclidean.
-    # In progress: Finish package
-    # TODO: For mixed data, when is it better to run zhich data. Test by running exp with these 3 options. & try it on a bunch of datasets, such as the ones that we already have for testing purposes. See if we have consistent results & if it depends on the balance between acategorigal & numerical features.
-    # TODO: Try clustering iteratively.
 
-    # TODO: Look into journals that take research artifacts. Or a DEMO at a conference.
-    # TODO: Documentation
-    # TODO: ACM Badge
-    # TODO: Publish: Look for open science journals - 1 v all
-    # NOTE: On a besoin juste d'un datapoint pour le ndcg. Meme system que pour regression.
-    # NOTE: Ranking/recommender system: need P & Recall as error measures for clustering that considers multiple error forms.
-    # TODO: site web ou on peut uploader le dataset, confirmer les colommes a utilier, sensitives. Penser un peu aux tests qu'on peut applquer.
-    # TODO: On peut faire un clustering qui considere +ieurs formes d'erruer. Pour pb de ranking, on a P & Recall - pour + tard.
-    # TODO: Look into finding hte number of clusters if it works or not. Should wokr
-
-    # TODO: K-centroid clustering variant - have including the fair-centroid version.
 
     parser.add_argument(
         "--sensitive_cols",
@@ -422,7 +405,6 @@ def parse_args():
     parser.add_argument(
         "--data_path", type=str, required=True, help="Path to input CSV file"
     )
-    # Output
     parser.add_argument(
         "--no_standardize",
         action="store_true",
@@ -435,7 +417,6 @@ def parse_args():
         "--output_dir", type=str, default=OUTPUT_DIR, help="Output directory for plots"
     )
 
-    # Batch experiment mode
     parser.add_argument(
         "--experiment",
         nargs="?",

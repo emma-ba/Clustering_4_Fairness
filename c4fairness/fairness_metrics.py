@@ -73,7 +73,7 @@ def cluster_value(values, kind, neg=None):
         return float((s == s.mode().iloc[0]).mean())
     if neg is None:
         neg = s.min()
-    return float((s != neg).mean())  # binary: proportion of the non-negative value
+    return float((s != neg).mean())
 
 
 def cluster_value_cat(values, kind):
@@ -294,7 +294,11 @@ def _r_fisher_test():
 
 def fisher_rxc_p(table):
     """r x c Fisher exact test p-value via R's fisher.test (rpy2). NaN if the
-    table is smaller than 2x2 after construction."""
+    table is smaller than 2x2 after construction.
+
+    Raises ImportError without the optional `[r]` extra and a system R; callers
+    must gate on `_has_r()`.
+    """
     table = np.asarray(table, dtype=int)
     if table.ndim != 2 or table.shape[0] < 2 or table.shape[1] < 2:
         return np.nan
@@ -309,15 +313,30 @@ _HAS_R = None
 
 def _has_r():
     """Cached probe: True if rpy2 + a working R are importable. Never raises, so a
-    missing R degrades to the scipy significance paths instead of crashing a run."""
+    missing R degrades to the scipy significance paths instead of crashing a run.
+
+    rpy2 narrates its own import fallback ("Error importing in API mode... Trying to
+    import in ABI mode") straight to stderr, which reads like a crash in a run log.
+    Both the logger and stderr are muted for the duration of the probe.
+    """
     global _HAS_R
     if _HAS_R is None:
+        import io
+        import logging
+        import contextlib
+
+        rpy2_log = logging.getLogger("rpy2")
+        prior = rpy2_log.level
+        rpy2_log.setLevel(logging.CRITICAL)
         try:
-            import rpy2.robjects as ro
-            ro.r  # force R to initialize
+            with contextlib.redirect_stderr(io.StringIO()):
+                import rpy2.robjects as ro
+                ro.r  # force R to initialize
             _HAS_R = True
         except Exception:
             _HAS_R = False
+        finally:
+            rpy2_log.setLevel(prior)
     return _HAS_R
 
 

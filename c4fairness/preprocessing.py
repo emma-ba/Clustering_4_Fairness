@@ -12,10 +12,15 @@ def encode_categoricals(
     """
     Encode categorical columns for clustering.
 
-    For kprototypes: no encoding — returns the column names so per-condition
-    indices can be computed later.
-    For all other algorithms: one-hot encodes string/category columns and
-    updates all column lists.
+    Three paths, selected by `algorithm` and `distance`:
+
+    - kprototypes: no encoding. Returns the categorical column names so per-condition
+      indices can be computed later.
+    - Gower: factorizes categorical columns in place (Gower compares codes by
+      matching, so it wants one column per feature) and additionally emits dummies
+      for multi-class columns, which the readable fairness tables need.
+    - everything else: one-hot encodes string/category columns and updates all
+      column lists.
 
     Parameters
     ----------
@@ -25,14 +30,18 @@ def encode_categoricals(
     categorical_cols_arg : list of str
         Explicitly specified categorical columns (e.g. from --categorical_cols).
     algorithm : str
+        Clustering algorithm; 'kprototypes' selects the no-encoding path.
+    distance : str, default='euclidean'
+        'gower' selects the factorize path.
 
     Returns
     -------
     df_encoded : pd.DataFrame
     col_lists_updated : dict
     categorical_col_names : list of str
-        For kprototypes: names of categorical columns (caller computes indices per condition).
-        For other algorithms: empty list (all columns are now numeric after encoding).
+        For kprototypes and Gower: names of the categorical columns, which callers
+        turn into the positional indices those two paths require.
+        For the one-hot path: empty, since every column is numeric after encoding.
     multiclass_dummies : dict of {original_col: [dummy_col_names]}
         For each multi-class column that was encoded, maps the original column
         name to its dummy column names. Used downstream to build the readable
@@ -43,7 +52,6 @@ def encode_categoricals(
         Empty for kprototypes and gower paths. Callers use this to exclude
         OHE dummies from StandardScaler.
     """
-    # Collect all columns used in clustering
     seen = set()
     all_cols_ordered = []
     for cols in col_lists.values():
@@ -52,7 +60,6 @@ def encode_categoricals(
                 seen.add(c)
                 all_cols_ordered.append(c)
 
-    # Identify categorical columns: dtype-based + user-specified
     categorical_col_names = set(categorical_cols_arg or [])
     for col in all_cols_ordered:
         if col in df.columns:
@@ -77,7 +84,7 @@ def encode_categoricals(
             # Multi-class cols additionally get readable 0/1 dummies kept ALONGSIDE
             # the factorized original: the factorized code column stays in col_lists
             # for the Gower distance, the dummies feed the (readable) fairness
-            # analysis (see _build_sensitive_analysis_list).
+            # analysis (see build_sensitive_analysis_list).
             if df_encoded[col].nunique(dropna=True) > 2:
                 dummies = pd.get_dummies(
                     df_encoded[col], prefix=col, drop_first=False
@@ -106,7 +113,6 @@ def encode_categoricals(
     if not categorical_col_names:
         return df, col_lists, [], {}, []
 
-    # One-hot encode each categorical column and update all col_lists
     df_encoded = df.copy()
     col_lists_updated = {name: list(cols) for name, cols in col_lists.items()}
     multiclass_dummies = {}
@@ -134,7 +140,6 @@ def encode_categoricals(
         dummy_cols = list(dummies.columns)
         all_ohe_dummy_cols.extend(dummy_cols)
 
-        # Check for column name collisions with existing columns (excluding the col being replaced)
         existing_cols = set(df_encoded.columns) - {col}
         collisions = existing_cols & set(dummy_cols)
         if collisions:

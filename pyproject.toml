@@ -45,7 +45,7 @@ Source = "https://github.com/emma-ba/Clustering_4_Fairness"
 # one-vs-all Fisher). Prerequisite for exact Fisher on multi-categorical features.
 r = ["rpy2"]
 experiment = ["rpy2"]
-web = ["gradio", "rpy2"]
+web = ["gradio>=5.6"]
 # scikit-learn-extra (KMedoids) has no numpy-2 wheels; only needed for --algorithm kmedoids.
 kmedoids = ["scikit-learn-extra"]
 

@@ -47,6 +47,46 @@ make-up. String sensitive columns (`sex`, `race`) are one-hot encoded automatica
 
 ---
 
+## What the output looks like
+
+Both heatmaps below come from a single experiment-mode run on the bundled COMPAS extract,
+auditing a recidivism classifier's **false-positive rate**:
+
+```bash
+c4fairness --data_path docs/datasets/compas_audit.csv --experiment \
+  --regular_cols age,priors_count \
+  --sensitive_cols sex,race,age --continuous_sensitive_cols age \
+  --y_true_col true_class --y_pred_col predicted_class --binary_error_metric fpr \
+  --error_label "FP Rate" --multicat_table_option salient --sensitive_labels "race:Ethnicity" \
+  --algorithm kmeans --n_clusters 4 --seed 42
+```
+
+### Detailed heatmap — one row per cluster
+
+Condition `+REG +SEN -err`: clustered on the features and the sensitive attributes, not on
+the error itself.
+
+![Per-cluster recap heatmap for the COMPAS false-positive-rate audit](https://raw.githubusercontent.com/emma-ba/Clustering_4_Fairness/main/docs/images/recap_heatmap_compas_fpr.png)
+
+Cluster 0 holds 9.3% of the test set and carries an **FP Rate of 0.85** against 0.34 overall
+— a gap of +0.54 at p ≈ 0. Its sensitive columns say who is in it: 76% African-American, 91%
+male, median age 37. The other three clusters sit between 0.22 and 0.43. That is a disparity
+localised to a pocket of the feature space, which a single per-race average would flatten.
+
+### Overview heatmap — one row per condition
+
+Experiment mode reruns the audit for every combination of feature groups (`REG` = regular
+features, `SEN` = sensitive, `ERR` = the error column), so you can check whether a finding
+survives the choice of what to cluster on.
+
+![Overview heatmap across all experiment conditions](https://raw.githubusercontent.com/emma-ba/Clustering_4_Fairness/main/docs/images/overview_heatmap_compas_fpr.png)
+
+Blue = cluster size, red = error, violet = sensitive composition; p-value columns render
+darker the more significant they are. Conditions that include `ERR` cluster *on* the error,
+so their `FP Rate gap` of 1.0 is expected, not a finding.
+
+---
+
 ## Web UI
 
 A [Gradio](https://www.gradio.app/) web app wraps experiment mode: upload a CSV, assign
@@ -310,7 +350,9 @@ Clustering_4_Fairness/
 │   ├── result_viz.py         # result-table heatmaps
 │   ├── visualization.py      # scatter/projection + composition plots
 │   └── webapp.py             # Gradio web UI (`c4fairness-web`)
-├── docs/                     # example notebooks + RESEARCH.md
+├── docs/                     # example notebooks
+│   ├── datasets/             # small COMPAS + student extracts the notebooks read
+│   └── images/               # heatmaps used in this README
 ├── tests/
 ├── Data/                     # datasets (not versioned)
 └── pyproject.toml

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from c4fairness.cli import (
-    _build_sensitive_analysis_list,
+    build_sensitive_analysis_list,
     _reconstruct_multicat,
     apply_salient_reconstruction,
 )
@@ -15,20 +15,20 @@ ORIG = ["region", "gender"]
 def test_analysis_list_onehot_keeps_dummies():
     # Euclidean layout: sensitive_cols already holds the dummies.
     sensitive = ["region_mid", "region_north", "region_south", "gender"]
-    got = _build_sensitive_analysis_list(sensitive, MCD, ORIG, option="onehot")
+    got = build_sensitive_analysis_list(sensitive, MCD, ORIG, option="onehot")
     assert got == ["region_mid", "region_north", "region_south", "gender"]
 
 
 def test_analysis_list_salient_uses_original_name():
     sensitive = ["region_mid", "region_north", "region_south", "gender"]
-    got = _build_sensitive_analysis_list(sensitive, MCD, ORIG, option="salient")
+    got = build_sensitive_analysis_list(sensitive, MCD, ORIG, option="salient")
     assert got == ["gender", "region"]  # dummies dropped, readable original added
 
 
 def test_analysis_list_salient_gower_layout():
     # Gower layout: sensitive_cols holds the factorized original, not the dummies.
     sensitive = ["region", "gender"]
-    got = _build_sensitive_analysis_list(sensitive, MCD, ORIG, option="salient")
+    got = build_sensitive_analysis_list(sensitive, MCD, ORIG, option="salient")
     assert got == ["gender", "region"]
 
 
@@ -54,7 +54,7 @@ def test_salient_make_recap_emits_multicat_columns():
         "region_north": [0, 0, 1, 1, 1, 1, 0, 0],
         "region_south": [0, 0, 0, 0, 0, 0, 1, 1],
     })
-    analysis = _build_sensitive_analysis_list(
+    analysis = build_sensitive_analysis_list(
         ["region_mid", "region_north", "region_south", "gender"], MCD, ORIG, option="salient"
     )
     apply_salient_reconstruction(df, MCD, ORIG)
