@@ -34,9 +34,9 @@ The import name is `c4fairness`; the CLI command is `c4fairness` (equivalently
 ## Quick start
 
 ```bash
-c4fairness --data_path Data/compas/Compas_error_shap.csv \
+c4fairness --data_path docs/datasets/compas_audit.csv \
     --regular_cols age,priors_count \
-    --sensitive_cols sex,race --continuous_sensitive_cols age \
+    --sensitive_cols sex,race,age --continuous_sensitive_cols age \
     --error_col errors --error_type binary \
     --algorithm kmeans --n_clusters 4 --seed 42
 ```
@@ -89,18 +89,23 @@ so their `FP Rate gap` of 1.0 is expected, not a finding.
 
 ## Web UI
 
-A [Gradio](https://www.gradio.app/) web app wraps experiment mode: upload a CSV, assign
-column roles, and run from the browser. Results (heatmaps, an overview table, downloadable
-CSVs) render in tabs, with **Home**, **Documentation**, and **About** pages.
+A [Gradio](https://www.gradio.app/) web app wraps the CLI: upload a CSV, assign column
+roles, and run from the browser. Results (heatmaps, an overview table, downloadable CSVs)
+render in tabs, with **Home**, **Documentation**, and **About** pages.
 
 ```bash
 pip install "c4fairness[web]"
 c4fairness-web
 ```
 
-Then open the printed local URL (default http://localhost:7860). The form exposes every CLI
-option; algorithm-specific fields (`eps`, `min_samples`, `max_iter`) appear only for the
-relevant algorithm.
+Then open the printed local URL (default http://localhost:7860). *Load example dataset*
+fills the form with the bundled COMPAS extract if you just want to see it work.
+
+Two run modes: **Single run** (the default) audits the one configuration on the form,
+while **Full sweep** repeats it for every feature-group combination. The sweep is
+several times slower. The form exposes every CLI option; algorithm-specific fields
+(`eps`, `min_samples`, `max_iter`) appear only for the relevant algorithm, and the run
+log streams while the job is running.
 
 ---
 
@@ -280,17 +285,19 @@ The `_w_<weights>` suffix records `--feature_weights` (feature + weight, e.g.
 
 ## Examples
 
+All four run against the datasets in [`docs/datasets/`](docs/datasets/).
+
 **Binary classification (COMPAS), auditing the false-positive rate:**
 ```bash
-c4fairness --data_path Data/compas/Compas_error_shap.csv \
-  --regular_cols age,priors_count --sensitive_cols sex,race --continuous_sensitive_cols age \
+c4fairness --data_path docs/datasets/compas_audit.csv \
+  --regular_cols age,priors_count --sensitive_cols sex,race,age --continuous_sensitive_cols age \
   --y_true_col true_class --y_pred_col predicted_class --binary_error_metric fpr \
   --multicat_table_option salient --algorithm kmeans --n_clusters 4 --seed 42
 ```
 
 **Experiment mode with automatic k selection:**
 ```bash
-c4fairness --data_path Data/compas/Compas_error_shap.csv \
+c4fairness --data_path docs/datasets/compas_audit.csv \
   --regular_cols age,priors_count --sensitive_cols sex,race \
   --error_col errors --error_type binary \
   --algorithm kmeans --n_min 2 --n_max 6 --scoring chi2_error --experiment
@@ -298,39 +305,55 @@ c4fairness --data_path Data/compas/Compas_error_shap.csv \
 
 **Regression (student grades):**
 ```bash
-c4fairness --data_path Data/student_performance.csv \
+c4fairness --data_path docs/datasets/student_grades.csv \
   --regular_cols G1,G2,studytime,absences --sensitive_cols sex_F,Medu,age \
   --continuous_sensitive_cols age --categorical_cols Medu \
   --y_true_col y_true --y_pred_col y_pred --error_type regression \
   --algorithm kmeans --n_clusters 3 --seed 42
 ```
 
-**Mixed types with Gower + kmedoids (real-world batch style):**
+**Mixed numeric/categorical types with Gower distance:**
 ```bash
-c4fairness --data_path Data/binary_student_dataset/binary_student_dataset_both_with_preds.csv \
-  --regular_cols num_of_prev_attempts,studied_credits,module_presentation_length \
-  --sensitive_cols gender,region,imd_band,disability,age_band \
-  --categorical_cols imd_band,code_module,region,age_band \
-  --error_col error --error_type binary \
-  --algorithm kmedoids --distance gower --n_min 2 --n_max 25 --scoring silhouette \
+c4fairness --data_path docs/datasets/student_grades.csv \
+  --regular_cols G1,G2,studytime,absences --sensitive_cols sex_F,Medu,age \
+  --continuous_sensitive_cols age --categorical_cols Medu,sex_F \
+  --y_true_col y_true --y_pred_col y_pred --error_type regression \
+  --algorithm hdbscan --distance gower --min_samples 15 --min_datapoints 25 \
   --no_standardize --projection pca --experiment
 ```
 
 Worked, narrated notebooks: [`docs/example_binary.ipynb`](docs/example_binary.ipynb) and
-[`docs/example_regression.ipynb`](docs/example_regression.ipynb). Research directions and a
-publishing plan: [`docs/RESEARCH.md`](docs/RESEARCH.md).
+[`docs/example_regression.ipynb`](docs/example_regression.ipynb).
 
 ---
 
-## Datasets used
+## Datasets
 
-| Dataset | Task | Sensitive attributes | N |
-|---|---|---|---|
-| COMPAS | Classification | `sex`, `race`, `age` | 5050 |
-| Student Performance | Regression | `sex_F`, `Medu`, `age` | 670 |
-| Open University (binary) | Classification | `gender`, `region`, `imd_band`, `disability`, `age_band` | 32593 |
-| German Credit | Classification | `Gender`, `Age`, `ForeignWorker` | 1000 |
-| Communities & Crime | Regression | `racepctblack` | 1994 |
+### Bundled
+
+Two extracts ship with the repository, in [`docs/datasets/`](docs/datasets/). Each row is
+one test-set example carrying the features, the ground truth, and a model's prediction, so
+they can be audited as-is.
+
+| File | Task | Sensitive attributes | N | Source |
+|---|---|---|---|---|
+| `compas_audit.csv` | Classification | `sex`, `race`, `age` | 5050 | [ProPublica, *Machine Bias*](https://github.com/propublica/compas-analysis) (`compas-scores-two-years.csv`) |
+| `student_grades.csv` | Regression | `sex_F`, `Medu`, `age` | 670 | [UCI — Student Performance](https://archive.ics.uci.edu/dataset/320/student+performance) |
+
+### Also evaluated
+
+Not redistributed here — fetch them from the source and add your model's predictions as a
+column.
+
+| Dataset | Task | Sensitive attributes | N | Source |
+|---|---|---|---|---|
+| Open University | Classification | `gender`, `region`, `imd_band`, `disability`, `age_band` | 32593 | [UCI — OULAD](https://archive.ics.uci.edu/dataset/349/open+university+learning+analytics+dataset) |
+| German Credit | Classification | `Gender`, `Age`, `ForeignWorker` | 1000 | [UCI — Statlog (German Credit Data)](https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data) |
+| Communities & Crime | Regression | `racepctblack` | 1994 | [UCI — Communities and Crime](https://archive.ics.uci.edu/dataset/183/communities+and+crime) |
+
+The bundled extracts are derived from their sources: columns are subset, and `y_pred` /
+`predicted_class` come from a model trained for these examples. Both originals carry their
+own licence and citation requirements — check the source before redistributing either.
 
 ---
 
@@ -351,9 +374,8 @@ Clustering_4_Fairness/
 │   ├── visualization.py      # scatter/projection + composition plots
 │   └── webapp.py             # Gradio web UI (`c4fairness-web`)
 ├── docs/                     # example notebooks
-│   ├── datasets/             # small COMPAS + student extracts the notebooks read
+│   ├── datasets/             # the COMPAS + student extracts the notebooks read
 │   └── images/               # heatmaps used in this README
 ├── tests/
-├── Data/                     # datasets (not versioned)
 └── pyproject.toml
 ```
