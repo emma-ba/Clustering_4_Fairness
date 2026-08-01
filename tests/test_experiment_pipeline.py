@@ -97,3 +97,37 @@ def test_experiment_err_group_multicat_error_does_not_crash(
 
     summ = glob.glob(os.path.join(out, "*experiment*", "results_summary.csv"))
     assert summ, "results_summary.csv not produced"
+
+
+def test_overview_error_gap_uses_the_rate_column(tiny_csv, tmp_path, monkeypatch):
+    # With --binary_error_metric, the Overview's error_sep is copied from chi_res,
+    # which is computed on the masked rate column. error_gap is computed here, and
+    # used to read the raw 0/1 misclassification column instead, so the two sat on
+    # different quantities in the same row. The Overview gap must equal the spread
+    # of the per-cluster rates in that condition's Detailed table.
+    monkeypatch.setattr(fm, "fisher_rxc_p", _scipy_fisher_stub)
+    out = str(tmp_path / "out")
+    argv = ["c4fairness", "--data_path", tiny_csv,
+            "--regular_cols", "a", "--sensitive_cols", "g,r",
+            "--algorithm", "kmeans", "--n_clusters", "3", "--seed", "1",
+            "--experiment", "ERR", "--no_plots", "--output_dir", out,
+            "--error_type", "binary", "--y_true_col", "yt", "--y_pred_col", "yp",
+            "--binary_error_metric", "fpr"]
+    monkeypatch.setattr("sys.argv", argv)
+    cli.main()
+
+    run_dir = glob.glob(os.path.join(out, "*experiment*"))[0]
+    overview = pd.read_csv(os.path.join(run_dir, "results_summary.csv"))
+    checked = 0
+    for _, row in overview.iterrows():
+        detailed = os.path.join(run_dir, row["cond_name"].replace(" ", "") + ".csv")
+        if not os.path.exists(detailed):
+            continue
+        clusters = pd.read_csv(detailed)
+        clusters = clusters[clusters["c"].astype(str).str.isdigit()]
+        rates = clusters["error_value"].astype(float).dropna()
+        if len(rates) < 2 or pd.isna(row["error_gap"]):
+            continue
+        assert row["error_gap"] == pytest.approx(rates.max() - rates.min(), abs=1e-3)
+        checked += 1
+    assert checked, "no condition had a comparable error_gap"

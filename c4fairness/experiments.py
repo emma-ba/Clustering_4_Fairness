@@ -33,10 +33,6 @@ from .fairness_metrics import (
 SILHOUETTE_WORKING_MEMORY_MIB = 128
 
 
-# =============================================================================
-# Utils for Results - Recap
-# =============================================================================
-
 def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors', error_type='binary', feature_matrix=None, distance_matrix=None, continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, error_cols_kind='binary', sensitive_gap_test='chi2'):
   """
   Create a per-cluster Detail recap of cluster info, error stats, and per-feature
@@ -81,7 +77,8 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   onehot = bool(error_cols)
   error_cols = list(error_cols or [])
 
-  # Exclude noise points (cluster label -1 from DBSCAN/HDBSCAN) before any computation
+  # Exclude noise (-1). min_datapoints demotes small clusters to noise for every
+    # algorithm, not just the density-based ones. before any computation
   noise_mask = data_result['clusters'] != -1
   data_result = data_result[noise_mask].copy()
   if feature_matrix is not None:
@@ -95,13 +92,11 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   # Classify each sensitive feature ONCE (declaration + cardinality, NOT dtype).
   kinds = {F: feature_kind(data_result[F], F in continuous_set) for F in sensitive_cols}
 
-  # ...with cluster size
   temp = data_result[['clusters']].copy()
   temp['count'] = 1
   recap = temp.groupby(['clusters'], as_index=False).sum()
   recap = recap.set_index('clusters', drop=False)
 
-  # ...with proportion of total (non-noise) population
   recap['proportion'] = recap['count'] / recap['count'].sum()
 
   if onehot:
@@ -150,7 +145,6 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   feat_gap_cat = {F: [] for F in multicat_cols}
   silhouette = []
 
-  # Get individual silhouette scores
   clusters = data_result['clusters']
   if(len(recap['clusters'].unique()) > 1):
     # Use scaled feature_matrix if provided (matches the space clustering was done in)
@@ -164,7 +158,6 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         silhouette_val = silhouette_samples(X_for_silhouette, clusters)
 
   for c in recap['clusters']:
-    # Get in-cluster data
     c_data = data_result.loc[data_result['clusters'] == c]
 
     # F_value is always computable (no one-vs-all needed)
@@ -185,7 +178,6 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
         if oh_kind == 'multicat':
           oh_cat[ec].append(cluster_value_cat(c_data[ec], 'multicat'))
 
-    # Get out-of-cluster data
     rest_data = data_result.loc[data_result['clusters'] != c]
     # Single-cluster guard: no one-vs-all possible -> *_gap / *_gap_sig are NaN.
     if(len(rest_data) == 0):
@@ -292,10 +284,6 @@ def make_recap(data_result, feature_set, sensitive_cols=None, error_col='errors'
   return recap
 
 
-# =============================================================================
-# Utils for Results - Separability Check (Chi-squared / Kruskal-Wallis)
-# =============================================================================
-
 def separability_check(data, labels, columns):
     """
     Test if clusters are significantly different across features.
@@ -323,13 +311,11 @@ def separability_check(data, labels, columns):
     results = {}
     unique_labels = [l for l in np.unique(labels) if l != -1]
 
-    # Filter to non-noise points
     mask = labels != -1
     data_filtered = data[mask]
     labels_filtered = labels[mask]
 
     if len(unique_labels) < 2:
-        # Need at least 2 clusters for comparison
         return pd.DataFrame(columns=['test', 'statistic', 'p_value'])
 
     for col in columns:
@@ -339,7 +325,6 @@ def separability_check(data, labels, columns):
         col_data = data_filtered[col]
 
         if col_data.dtype in ['object', 'category', 'bool'] or col_data.dtype.name == 'category':
-            # Chi-squared for categorical
             try:
                 contingency = pd.crosstab(col_data, labels_filtered)
                 stat, p, dof, expected = chi2_contingency(contingency)
@@ -347,7 +332,6 @@ def separability_check(data, labels, columns):
             except Exception:
                 results[col] = {'test': 'chi2', 'statistic': np.nan, 'p_value': np.nan}
         else:
-            # Numeric: Mann-Whitney U (2 clusters) or Kruskal-Wallis (3+)
             try:
                 groups = [data_filtered[labels_filtered == l][col].dropna().values for l in unique_labels]
                 groups = [g for g in groups if len(g) > 0]
@@ -365,10 +349,6 @@ def separability_check(data, labels, columns):
     return pd.DataFrame(results).T
 
 
-# =============================================================================
-# Utils for Results - Chi-Square Tests
-# =============================================================================
-
 def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col='errors', continuous_sensitive_cols=None, multiclass_option=None, error_cols=None, sig='auto'):
   """
   Compute one omnibus separability p-value per condition for the error column
@@ -377,8 +357,9 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
   Each sensitive feature is classified ONCE (binary / multicat / numeric) via
   feature_kind() and gets a single `<F>_sep` column (chi2 for categorical, one-way
   ANOVA for numeric). The error column gets an `error_sep` column: one-way ANOVA
-  for regression, otherwise an r x c Fisher exact test (R via rpy2) on the
-  (error-value x cluster) table. Benjamini-Hochberg FDR correction is applied
+  for regression, otherwise a categorical separability test on the
+  (error-value x cluster) table, selected by `sig` — exact r x c Fisher via R when
+  it is installed, else scipy (chi-square, or one-vs-all Fisher on sparse tables). Benjamini-Hochberg FDR correction is applied
   ACROSS the `<F>_sep` columns within each row.
 
   Parameters
@@ -450,10 +431,6 @@ def make_chi_tests(results, sensitive_cols=None, error_type='binary', error_col=
 
   return chi_df
 
-
-# =============================================================================
-# Utils for Results - All Quality Metrics
-# =============================================================================
 
 def recap_quali_metrics(chi_res, results, sensitive_cols=None, continuous_sensitive_cols=None, error_col='errors', error_type='binary', multiclass_option=None, error_cols=None, error_cols_kind='binary', sensitive_gap_test='chi2'):
   """
@@ -597,9 +574,7 @@ def recap_quali_metrics(chi_res, results, sensitive_cols=None, continuous_sensit
   return pd.DataFrame(all_quali)
 
 
-# =============================================================================
 # Visualization — result-table heatmaps (see src/result_viz.py)
-# =============================================================================
 # Re-exported so existing callers keep importing these from c4fairness.experiments;
 # the implementations live in result_viz to keep this module focused on table
 # building.
@@ -608,11 +583,6 @@ from .result_viz import (  # noqa: E402,F401
     render_result_heatmap, plot_quality_heatmap, plot_cluster_recap_heatmap,
 )
 
-
-
-# =============================================================================
-# Experiment Runner
-# =============================================================================
 
 def run_experiments_generic(data, exp_condition, algorithm, distance,
                             n_clusters=None, n_min=None, n_max=None,
@@ -750,10 +720,6 @@ def run_experiments_generic(data, exp_condition, algorithm, distance,
   return results
 
 
-# =============================================================================
-# Experimental Conditions Setup
-# =============================================================================
-
 def create_exp_conditions(groups):
   """
   Generate all experimental conditions from named feature groups.
@@ -780,13 +746,11 @@ def create_exp_conditions(groups):
   feature_set_descr = []
   feature_set = []
 
-  # Generate all non-empty subsets
   for r in range(1, n + 1):
     for subset in combinations(range(n), r):
       included = set(subset)
       included_names = [group_names[i] for i in included]
 
-      # Skip if the only group is 'ERR'
       if included_names == ['ERR']:
         continue
 
@@ -799,10 +763,8 @@ def create_exp_conditions(groups):
           name_parts.append(f'-{gname.lower()}')
       name = ' '.join(name_parts)
 
-      # Build description
       descr = ' + '.join(included_names)
 
-      # Build feature set: concatenation of included groups' columns
       cols = []
       for i in included:
         cols.extend(groups[group_names[i]])

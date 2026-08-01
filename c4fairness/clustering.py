@@ -5,7 +5,7 @@ This module provides a flexible clustering function that supports:
 - Filtering by prediction outcome (TP, TN, FP, FN)
 - Multiple distance metrics (Euclidean, Manhattan, Gower)
 - Feature weighting
-- Multiple clustering algorithms (HDBSCAN, with placeholders for others)
+- Six algorithms: dbscan, hdbscan, kmeans, bisectingkmeans, kmedoids, kprototypes
 - Cluster quality evaluation
 """
 
@@ -23,7 +23,6 @@ from kmodes.kprototypes import KPrototypes, euclidean_dissim, matching_dissim
 from .scoring import ScoringFn, silhouette_scorer
 @dataclass
 class ClusteringResult:
-    """Container for clustering results and evaluation metrics."""
 
     labels: np.ndarray
     n_clusters: int
@@ -33,7 +32,7 @@ class ClusteringResult:
     cluster_sizes: dict
     feature_matrix: np.ndarray
     mask: Optional[np.ndarray]
-    distance_matrix: Optional[np.ndarray] = None  # precomputed Gower matrix (non-noise rows), if available
+    distance_matrix: Optional[np.ndarray] = None  # precomputed distances on non-noise rows: Gower, or the KPrototypes Huang cost
 
 def gower_distance(X: np.ndarray,
                    categorical_features: Optional[list[int]] = None,
@@ -165,7 +164,14 @@ def _find_best_k(
             clusterer = BisectingKMeans(n_clusters=k, random_state=random_state, max_iter=max_iter)
             labels = clusterer.fit_predict(X_fit)
         elif algorithm == "kmedoids":
-            from sklearn_extra.cluster import KMedoids
+            try:
+                from sklearn_extra.cluster import KMedoids
+            except ImportError as exc:
+                raise ImportError(
+                    "kmedoids requires scikit-learn-extra, which has no wheels for "
+                    "numpy >= 2. Use --algorithm hdbscan --distance gower instead, "
+                    "or install scikit-learn-extra with a compatible numpy version."
+                ) from exc
             clusterer = KMedoids(n_clusters=k, metric=kmedoids_metric, random_state=random_state, max_iter=max_iter)
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn_extra")
@@ -227,7 +233,7 @@ def cluster(
         Filter to specific confusion matrix category before clustering.
         TP_TN = correct predictions, FP_FN = errors.
         Requires y_true and y_pred to be provided.
-    algorithm : {"hdbscan", "kmeans", "bisecting", "agglomerative"}, default="hdbscan"
+    algorithm : {"dbscan", "hdbscan", "kmeans", "bisectingkmeans", "kmedoids", "kprototypes"}, default="hdbscan"
         Clustering algorithm to use. "bisecting" uses Bisecting K-Means.
     distance : {"euclidean", "manhattan", "gower"}, default="euclidean"
         Distance metric for clustering.
@@ -239,12 +245,12 @@ def cluster(
         or dict mapping feature names to weights (if features is DataFrame).
     eps : float, default=0.5                                                                                                                                                            
           Maximum distance between samples for neighborhood (DBSCAN only).
-    min_cluster_size : int, default=50
+    min_cluster_size : int, default=15
         Minimum cluster size (for HDBSCAN).
     min_samples : int, default=10
         Minimum samples in neighborhood (for HDBSCAN).
     n_clusters : int, optional
-        Number of clusters (for KMeans, Agglomerative).
+        Number of clusters (kmeans / bisectingkmeans / kmedoids / kprototypes).
     n_min : int, optional
         Minimum number of clusters for range-based search.
     n_max : int, optional
@@ -261,7 +267,6 @@ def cluster(
     ClusteringResult
         Dataclass containing cluster labels, metrics, and metadata.
     """
-    # Convert DataFrame to numpy if needed
     # Always copy to avoid in-place standardization mutating the caller's DataFrame
     if isinstance(features, pd.DataFrame):
         feature_names = features.columns.tolist()
@@ -278,7 +283,6 @@ def cluster(
         min_cluster_size = min_datapoints
         min_datapoints = None  # already handled natively above
         
-    # Compute mask for confusion matrix subset
     mask = None
     if subset is not None:
         if y_true is None or y_pred is None:
@@ -300,7 +304,6 @@ def cluster(
 
         X = X[mask]
 
-    # Handle feature weights
     weights = None
     if feature_weights is not None:
         if isinstance(feature_weights, dict) and feature_names is not None:
@@ -322,14 +325,12 @@ def cluster(
             scaler = StandardScaler()
             X = scaler.fit_transform(X)
 
-    # Apply feature weights (for non-Gower distances)
     if weights is not None and distance != "gower":
         X = X * np.sqrt(weights)
 
     if algorithm == "dbscan":
         if distance == "gower":
-            # DBSCAN does not have built-in support for Gower distance.
-            # Compute the distance matrix manually and pass with metric="precomputed".
+            # DBSCAN has no Gower metric; hand it a precomputed matrix.
             dist_matrix = gower_distance(X, categorical_features, weights)
             clusterer = DBSCAN(
                 eps=eps,
@@ -348,8 +349,7 @@ def cluster(
             raise ValueError(f"DBSCAN does not support distance='{distance}'. Use 'euclidean', 'manhattan', or 'gower'.")
     elif algorithm == "hdbscan":
         if distance == "gower":
-            # HDBSCAN does not have built-in support for Gower distance.
-            # Compute the distance matrix manually and pass with metric="precomputed".
+            # HDBSCAN has no Gower metric; hand it a precomputed matrix.
             dist_matrix = gower_distance(X, categorical_features, weights)
             clusterer = HDBSCAN(
                 min_cluster_size=min_cluster_size,
@@ -369,22 +369,17 @@ def cluster(
 
 
     elif algorithm in ("kmeans", "bisectingkmeans", "kmedoids", "kprototypes"):
-        # Default scoring function if none provided
         _scoring = scoring_fn if scoring_fn is not None else silhouette_scorer
-        # Validate kprototypes requirements
         if algorithm == "kprototypes":
-            # NOTE: KPrototypes uses its own internal distance metric (Huang's cost function):
-            #   - Numeric features: squared Euclidean distance
-            #   - Categorical features: simple matching dissimilarity (0 if match, 1 otherwise)
-            # Gower distance is not compatible with KPrototypes.
-            # For Gower-based mixed-type clustering, use DBSCAN or HDBSCAN with --distance gower.
+            # KPrototypes uses Huang's cost: squared Euclidean on the numeric
+            # features, matching dissimilarity on the categorical ones.
             if categorical_features is None or len(categorical_features) == 0:
                 raise ValueError("kprototypes requires categorical_features to be specified")
 
-        if algorithm in ("kmeans", "bisectingkmeans") and distance == "gower":
+        if algorithm in ("kmeans", "bisectingkmeans", "kprototypes") and distance == "gower":
             raise ValueError(
                 f"{algorithm} requires a Euclidean feature space to compute centroids and "
-                f"cannot use Gower distance. Use --algorithm kmedoids --distance gower instead."
+                f"cannot use Gower distance. Use --algorithm hdbscan --distance gower instead."
             )
 
         if algorithm == "kmedoids":
@@ -408,7 +403,14 @@ def cluster(
                 clusterer = BisectingKMeans(n_clusters=n_clusters, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kmedoids":
-                from sklearn_extra.cluster import KMedoids
+                try:
+                    from sklearn_extra.cluster import KMedoids
+                except ImportError as exc:
+                    raise ImportError(
+                        "kmedoids requires scikit-learn-extra, which has no wheels for "
+                        "numpy >= 2. Use --algorithm hdbscan --distance gower instead, "
+                        "or install scikit-learn-extra with a compatible numpy version."
+                    ) from exc
                 clusterer = KMedoids(n_clusters=n_clusters, metric=kmedoids_metric, random_state=random_state, max_iter=max_iter)
                 labels = clusterer.fit_predict(X_fit)
             elif algorithm == "kprototypes":
@@ -418,7 +420,6 @@ def cluster(
                 clusterer = KPrototypes(**kp_kwargs)
                 labels = clusterer.fit_predict(X_fit, categorical=categorical_features)
 
-        # Range-based k search using scoring function
         elif n_min is not None and n_max is not None:
             best_k, labels, best_score = _find_best_k(
                 X, X_fit, n_min, n_max, algorithm, _scoring,
@@ -435,7 +436,6 @@ def cluster(
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")
 
-    # Filter small clusters to noise if min_datapoints is set
     if min_datapoints is not None:
         for label in set(labels):
             if label == -1:
@@ -450,7 +450,6 @@ def cluster(
         label_map = {old: new for new, old in enumerate(unique_non_noise)}
         labels = np.array([label_map.get(l, -1) for l in labels])
 
-    # Compute evaluation metrics
     unique_labels = set(labels)
     n_clusters = len(unique_labels - {-1})
     n_noise = (labels == -1).sum()
@@ -481,7 +480,6 @@ def cluster(
                 gower_mat = num_dm + gamma * cat_dm
                 silhouette = silhouette_score(gower_mat, labels[non_noise_mask], metric="precomputed")
             elif distance == "gower":
-                # Recompute Gower matrix on non-noise rows and use metric="precomputed"
                 gower_mat = gower_distance(X[non_noise_mask], categorical_features, weights)
                 silhouette = silhouette_score(gower_mat, labels[non_noise_mask], metric="precomputed")
                 # Calinski-Harabasz not supported with precomputed metric
@@ -489,7 +487,6 @@ def cluster(
                 silhouette = silhouette_score(X[non_noise_mask], labels[non_noise_mask])
                 calinski = calinski_harabasz_score(X[non_noise_mask], labels[non_noise_mask])
 
-    # Compute cluster sizes
     cluster_sizes = {}
     for label in unique_labels:
         cluster_sizes[label] = (labels == label).sum()

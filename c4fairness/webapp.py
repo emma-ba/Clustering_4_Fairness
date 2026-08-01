@@ -1,5 +1,5 @@
 """
-Gradio web UI for c4fairness experiment mode.
+Gradio web UI for c4fairness: single-run audits and full feature-group sweeps.
 
 
 Install the extra:  pip install "c4fairness[web]"   (R >= 4.5 optional; scipy fallback otherwise).
@@ -12,12 +12,14 @@ import glob
 import signal
 import shutil
 import tempfile
+import threading
 import subprocess
 import pandas as pd
 
-# gradio imported lazily inside launch() so _build_cmd stays testable without it.
+# gradio imported lazily inside _build() so _build_cmd stays testable without it.
 
-RUN_TIMEOUT_S = int(os.environ.get("C4F_WEB_TIMEOUT", "3000"))  # per-run cap; override via env
+RUN_TIMEOUT_S = int(os.environ.get("C4F_WEB_TIMEOUT", "600"))  # per-run cap; override via env
+KEEP_RUNS = 2  # previous run dirs left on disk so their images keep resolving in the browser
 
 
 HOME_MD = """
@@ -33,11 +35,21 @@ DOC_MD = """
 
 
 
-1. **Upload** a CSV where each row is one test-set example (features + the model's outputs).
+1. **Upload** a CSV where each row is one test-set example (features + the model's
+   outputs), or press *Load example dataset* to try it on COMPAS.
 2. **Columns** — assign roles (below).
 3. **Error** — tell the app how to read the model's mistakes.
 4. **Clustering options** — algorithm + its parameters (only the relevant ones are shown).
 5. **Run** — heatmaps and tables appear in the tabs.
+
+### Run modes
+- **Single run** audits exactly the configuration on the form. This is the default.
+- **Full sweep** repeats that audit for every combination of the feature groups (regular,
+  sensitive, error), which shows whether a finding survives the choice of what to cluster
+  on. It runs one audit per combination, so it takes several times longer.
+
+Both modes get slower with more rows, a wider k range, and the `tsne` projection, which is
+quadratic in the number of rows and runs once per condition.
 
 ### Column roles
 - **Regular features** — numeric/other features the clustering groups on.
@@ -93,9 +105,6 @@ Twente (UT).**
 ### Authors
 - Filip Muntean — <filip.mihai.muntean@gmail.com>
 - Emma Beauxis-Aussalet — <e.m.a.l.beauxisaussalet@vu.nl>
-
-Made at **Vrije Universiteit Amsterdam (VU)**, in collaboration with the
-**University of Twente (UT)**.
 """
 
 
@@ -137,12 +146,22 @@ def _build_cmd(
     separability_check=False,
     categorical_cols="",
     no_standardize=False,
-    projection="tsne",
+    projection="none",
+    experiment=True,
+    max_composition_plots=6,
 ):
-    """Assemble the `c4fairness --experiment ...` argv from form inputs."""
-    cmd = [sys.executable, "-m", "c4fairness.main", "--data_path", data_path, "--experiment"]
-    if exclude:
-        cmd.append(exclude)
+    """Assemble the `c4fairness ...` argv from form inputs.
+
+    `experiment=True` sweeps every feature-group combination (2^n - 2 conditions);
+    `False` runs the single configuration the form describes.
+    """
+    cmd = [sys.executable, "-m", "c4fairness.main", "--data_path", data_path]
+    if experiment:
+        cmd.append("--experiment")
+        if exclude:
+            cmd.append(exclude)
+        if max_composition_plots:
+            cmd += ["--max_composition_plots", str(int(max_composition_plots))]
     cmd += [
         "--algorithm",
         algorithm,
@@ -239,11 +258,61 @@ def _cols(path):
         return []
 
 
+EXAMPLE_CSV = "compas_audit.csv"
+EXAMPLE_URL = (
+    "https://raw.githubusercontent.com/emma-ba/Clustering_4_Fairness/main/"
+    f"docs/datasets/{EXAMPLE_CSV}"
+)
+
+
+def _example_dataset():
+    """Path to the bundled COMPAS extract, so a first visit can run something.
+
+    Prefers a repo checkout; falls back to fetching it, because `docs/` is not part
+    of the installed package.
+    """
+    local = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "docs", "datasets", EXAMPLE_CSV)
+    if os.path.exists(local):
+        return local
+    import urllib.request
+    dest = os.path.join(tempfile.mkdtemp(prefix="c4f_example_"), EXAMPLE_CSV)
+    urllib.request.urlretrieve(EXAMPLE_URL, dest)
+    return dest
+
+
 def _csv1(v):
     """Coerce a dropdown value (list / str / None) to a comma string."""
     if isinstance(v, (list, tuple)):
         return ",".join(str(x) for x in v)
     return v or ""
+
+
+def _validate(file, regular, sensitive, special, error_type, error_col,
+              y_true, y_pred, binary_error_metric):
+    """Form-level checks. Returns an error message, or None when the run can proceed.
+
+    Without these the empty flag reaches the subprocess as e.g. `--error_col ""` and
+    fails minutes later with a traceback in the log.
+    """
+    if file is None:
+        return "Upload a CSV first."
+    if not _csv1(sensitive):
+        return "Pick at least one Sensitive feature — the audit is defined against it."
+    if not (_csv1(regular) or _csv1(special)):
+        return "Pick at least one Regular (or Special) feature to cluster on."
+    if error_type == "binary":
+        if binary_error_metric == "raw" and not _csv1(error_col):
+            return "Pick an Error column (or a metric that derives from y_true/y_pred)."
+        if binary_error_metric != "raw" and not (_csv1(y_true) and _csv1(y_pred)):
+            return f"'{binary_error_metric}' needs both y_true and y_pred columns."
+    elif error_type == "regression":
+        if not _csv1(error_col) and not (_csv1(y_true) and _csv1(y_pred)):
+            return "Regression needs an Error column, or both y_true and y_pred."
+    else:  # multiclass
+        if not (_csv1(y_true) and _csv1(y_pred)):
+            return "Multiclass needs both y_true and y_pred columns."
+    return None
 
 
 def _run(
@@ -284,25 +353,20 @@ def _run(
     categorical_cols,
     no_standardize,
     projection,
+    mode,
+    max_composition_plots,
 ):
-    if file is None:
-        return "Upload a CSV first.", [], [], None
-    # Validate required column pickers up front — an empty flag otherwise reaches the
-    # subprocess as e.g. `--error_col ""` and fails with a cryptic log message.
-    if error_type == "binary":
-        if binary_error_metric == "raw" and not _csv1(error_col):
-            return "Pick an Error column (or a metric that derives from y_true/y_pred).", [], [], None
-        if binary_error_metric != "raw" and not (_csv1(y_true) and _csv1(y_pred)):
-            return f"'{binary_error_metric}' needs both y_true and y_pred columns.", [], [], None
-    elif error_type == "regression":
-        if not _csv1(error_col) and not (_csv1(y_true) and _csv1(y_pred)):
-            return "Regression needs an Error column, or both y_true and y_pred.", [], [], None
-    else:  # multiclass
-        if not (_csv1(y_true) and _csv1(y_pred)):
-            return "Multiclass needs both y_true and y_pred columns.", [], [], None
-    # ponytail: single-user demo — clear prior run dirs so disk doesn't grow unbounded.
-    # If concurrent runs ever matter, switch to per-run TTL cleanup instead.
-    for d in glob.glob(os.path.join(tempfile.gettempdir(), "c4f_web_*")):
+    err = _validate(file, regular, sensitive, special, error_type, error_col,
+                    y_true, y_pred, binary_error_metric)
+    if err:
+        yield err, [], [], None
+        return
+    # Deleting a run whose images the browser is still fetching breaks the gallery,
+    # so the newest few survive. Assumes one user at a time; key the dirs by session
+    # if that changes.
+    old = sorted(glob.glob(os.path.join(tempfile.gettempdir(), "c4f_web_*")),
+                 key=os.path.getmtime)
+    for d in old[:-KEEP_RUNS] if KEEP_RUNS else old:
         shutil.rmtree(d, ignore_errors=True)
     out_dir = tempfile.mkdtemp(prefix="c4f_web_")
     cmd = _build_cmd(
@@ -343,41 +407,73 @@ def _run(
         separability_check=bool(separability_check),
         categorical_cols=_csv1(categorical_cols),
         no_standardize=bool(no_standardize),
-        projection=(projection or "tsne"),
+        projection=(projection or "none"),
+        experiment=(mode != "Single run"),
+        max_composition_plots=max_composition_plots,
     )
-    # ponytail: hard cap so a runaway run can't hang the queue on a public demo.
     # start_new_session puts the child in its own process group so on timeout we can
     # SIGKILL the whole group — otherwise grandchildren (matplotlib, etc.) can orphan.
+    # stderr is folded into stdout so one stream can be tailed line by line.
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        start_new_session=True,
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        bufsize=1, start_new_session=True,
     )
-    try:
-        out, err = proc.communicate(timeout=RUN_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
+    # The timeout runs on its own timer rather than being checked inside the read
+    # loop: `for line in proc.stdout` blocks until the child writes a newline, and
+    # the child goes minutes at a time without printing (per-condition t-SNE, the
+    # plot loops). Checking the clock only on arrival of a line would never fire
+    # for the runs that most need stopping.
+    killed = threading.Event()
+
+    def _kill():
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
+            killed.set()
+        except (ProcessLookupError, PermissionError):
             pass
-        out, err = proc.communicate()
-        return (
-            f"{(out or '') + (err or '')}\n\nRun exceeded {RUN_TIMEOUT_S // 60} min and "
-            "was stopped. Try fewer rows, a smaller k range, or a simpler algorithm.",
+
+    watchdog = threading.Timer(RUN_TIMEOUT_S, _kill)
+    watchdog.daemon = True
+    watchdog.start()
+    lines = []
+    try:
+        for line in proc.stdout:
+            lines.append(line)
+            # Stream the log; the result components stay empty until the run finishes.
+            yield "".join(lines), [], [], None
+        proc.wait()
+    finally:
+        watchdog.cancel()
+    if killed.is_set():
+        yield (
+            "".join(lines) + f"\n\nRun exceeded {RUN_TIMEOUT_S // 60} min and was stopped. "
+            "Try fewer rows, a smaller k range, or a simpler algorithm.",
             [], [], None,
         )
-    log = (out or "") + (err or "")
+        return
+    log = "".join(lines)
     if proc.returncode != 0:
         log = f"⚠ run exited with code {proc.returncode}\n\n" + log
-    # run_batch_experiment writes into out_dir/<timestamp>_experiment_.../
-    runs = sorted(glob.glob(os.path.join(out_dir, "*experiment*")))
+    # Every mode writes into out_dir/<timestamp>_.../, but at different depths: a
+    # single run and a single-seed sweep put their files there directly, while
+    # --seeds adds a seed_<n>/ level underneath. Both globs recurse so multi-seed
+    # runs don't come back with an empty gallery.
+    runs = sorted(d for d in glob.glob(os.path.join(out_dir, "*")) if os.path.isdir(d))
     base = runs[-1] if runs else out_dir
-    pngs = sorted(glob.glob(os.path.join(base, "*.png")))
-    csvs = sorted(glob.glob(os.path.join(base, "*.csv")))
-    summary = os.path.join(base, "results_summary.csv")
-    preview = pd.read_csv(summary) if os.path.exists(summary) else None
+    pngs = sorted(glob.glob(os.path.join(base, "**", "*.png"), recursive=True))
+    csvs = sorted(glob.glob(os.path.join(base, "**", "*.csv"), recursive=True))
+    # The summary table each mode produces: Overview for a sweep, the cross-seed
+    # table for --seeds, the per-cluster recap for a single run.
+    preview = None
+    for candidate in (os.path.join(base, "results_summary.csv"),
+                      os.path.join(base, "cross_seed_summary.csv"),
+                      *sorted(glob.glob(os.path.join(base, "recap", "*.csv")))):
+        if os.path.exists(candidate):
+            preview = pd.read_csv(candidate)
+            break
     if not pngs and not csvs:
-        log += "\n\n(no outputs — check the log above; experiment mode needs R >= 4.5 + rpy2.)"
-    return log, pngs, csvs, preview
+        log += "\n\n(no outputs — check the log above.)"
+    yield log, pngs, csvs, preview
 
 
 def _build():
@@ -396,6 +492,7 @@ def _build():
     with gr.Blocks(title="c4fairness — Clustering for Fairness") as demo:
         gr.Markdown(HOME_MD)
         file = gr.File(label="1. Dataset CSV", file_types=[".csv"])
+        example_btn = gr.Button("Load example dataset (COMPAS)", size="sm")
 
         with gr.Group():
             gr.Markdown("### 2. Columns  *(populated from your CSV)*")
@@ -535,8 +632,13 @@ def _build():
                     label="Confusion-matrix subset",
                 )
                 min_datapoints = gr.Number(value=0, label="min_datapoints (0 = off)", precision=0)
-                projection = gr.Textbox(value="tsne", label="Projection(s)",
-                                        placeholder="pca,tsne  or  none")
+                # A dropdown, not free text: a typo used to reach argparse and kill the
+                # run only after all the clustering had finished.
+                projection = gr.Dropdown(
+                    ["none", "pca", "tsne", "pca,tsne"], value="none",
+                    label="Projection",
+                    info="Scatter plots. t-SNE is O(n^2) and runs per condition",
+                )
             with gr.Row():
                 categorical_cols = gr.Dropdown(
                     label="Force categorical", multiselect=True,
@@ -544,8 +646,20 @@ def _build():
                 )
                 separability_check = gr.Checkbox(label="Separability check", value=False)
                 no_standardize = gr.Checkbox(label="Skip StandardScaler", value=False)
+            max_composition_plots = gr.Number(
+                value=6, label="Max composition plots", precision=0,
+                info="Sweep mode emits one per condition x sensitive attribute; 0 = no cap",
+            )
 
-        run_btn = gr.Button("▶ Run experiment", variant="primary", size="lg")
+        mode = gr.Radio(
+            ["Single run", "Full sweep"],
+            value="Single run",
+            label="Run mode",
+            info="Single run audits the configuration above. Full sweep repeats it for "
+            "every feature-group combination (REG/SEN/ERR) — thorough, and several times "
+            "slower.",
+        )
+        run_btn = gr.Button("▶ Run", variant="primary", size="lg")
 
         with gr.Tab("Heatmaps"):
             gallery = gr.Gallery(label="Heatmaps & plots", columns=2, height=520)
@@ -567,6 +681,7 @@ def _build():
             return [gr.update(choices=cols, value=None) for _ in range(len(_pickers))]
 
         file.change(_fill, inputs=file, outputs=_pickers)
+        example_btn.click(_example_dataset, outputs=file)
 
         # Show only the fields the chosen error type uses. y_true/y_pred stay visible
         # for binary too — the confusion-matrix rate metrics need them.
@@ -634,6 +749,8 @@ def _build():
                 categorical_cols,
                 no_standardize,
                 projection,
+                mode,
+                max_composition_plots,
             ],
             outputs=[log, gallery, files, preview],
         )
@@ -696,6 +813,20 @@ def _selfcheck():
     c = _build_cmd("d.csv", "/out", "age", "race", "binary", "err", "", "", "per_class",
                    "kprototypes", "gower", 4, 42, "")
     assert "--max_iter" in c
+    # single run drops --experiment and the flags that only apply to the sweep
+    c = _build_cmd("d.csv", "/out", "age", "race", "binary", "err", "", "", "per_class",
+                   "kmeans", "euclidean", 4, 42, "SPECIAL", experiment=False)
+    assert "--experiment" not in c and "SPECIAL" not in c
+    assert "--max_composition_plots" not in c
+    # the sweep keeps them
+    c = _build_cmd("d.csv", "/out", "age", "race", "binary", "err", "", "", "per_class",
+                   "kmeans", "euclidean", 4, 42, "", max_composition_plots=6)
+    assert c[c.index("--max_composition_plots") + 1] == "6"
+    # form validation catches the empty pickers before a subprocess is spawned
+    assert _validate(None, "", "", "", "binary", "", "", "", "raw")
+    assert _validate(object(), "age", "", "", "binary", "err", "", "", "raw")
+    assert _validate(object(), "", "", "", "binary", "err", "", "", "raw")
+    assert _validate(object(), "age", "race", "", "binary", "err", "", "", "raw") is None
     print("webapp selfcheck OK")
 
 

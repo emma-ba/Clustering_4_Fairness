@@ -21,7 +21,10 @@ from c4fairness.experiments import (
     separability_check,
 )
 from c4fairness.preprocessing import encode_categoricals
-from c4fairness.cli import parse_column_list, parse_feature_weights, _build_sensitive_analysis_list, parse_label_map
+from c4fairness.cli import (
+    parse_column_list, parse_feature_weights, parse_projection_list,
+    build_sensitive_analysis_list, parse_label_map,
+)
 
 
 def run_batch_experiment(df, args, output_dir, metadata=None):#
@@ -63,7 +66,6 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
             f"--continuous_sensitive_cols entries not found in --sensitive_cols: {sorted(unknown_continuous)}"
         )
 
-    # Validate: need error_col and at least one feature group
     if not error_col:
         raise ValueError("--error_col is required in experiment mode")
     if not regular_cols and not sensitive_cols and not special_cols:
@@ -74,7 +76,6 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # Preserve original (pre-encoding) sensitive column names for fairness analysis
     original_sensitive_cols = parse_column_list(args.sensitive_cols)
 
-    # Resolve error_label
     error_label = getattr(args, 'error_label', None) or error_col or 'error'
 
     # Encode categorical columns (one-hot for non-kprototypes; detect names for kprototypes).
@@ -95,12 +96,11 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # multi-class dummies (factorized originals dropped), deduplicated across the
     # Euclidean (dummies already in sensitive_cols) and Gower (factorized original
     # in sensitive_cols) paths.
-    sensitive_cols_analysis = _build_sensitive_analysis_list(
+    sensitive_cols_analysis = build_sensitive_analysis_list(
         sensitive_cols, multiclass_dummies, original_sensitive_cols,
         option=args.multicat_table_option,
     )
 
-    # Build groups dict for condition generation
     groups = {}
     if regular_cols:
         groups['REG'] = regular_cols
@@ -124,12 +124,10 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         groups = {k: v for k, v in groups.items() if k not in excluded}
         print(f"  Excluded groups: {excluded - unknown}")
 
-    # Create experimental conditions
     exp_condition = create_exp_conditions(groups)
     print(f"  Conditions: {len(exp_condition)}")
     print(f"  Groups: {list(groups.keys())}")
 
-    # Save experimental conditions table
     exp_condition_save = exp_condition[['feature_set_descr', 'feature_set_name']].copy()
     exp_condition_save['feature_set'] = exp_condition['feature_set'].apply(lambda x: ', '.join(x))
     exp_condition_save.to_csv(f"{output_dir}/exp_condition.csv", index=False)
@@ -206,16 +204,17 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         sensitive_gap_test=args.sensitive_gap_test,
     )
 
-    # Print progress for each condition
     print()
     for i, cond_name in enumerate(results['cond_name']):
         recap = results['cond_recap'][i]
         n_clusters = len(recap)
         silhouette_avg = recap['silh'].mean() if 'silh' in recap.columns else np.nan
         print(f"Condition {i+1}/{len(results['cond_name'])}: {cond_name.strip()}")
-        print(f"  Clusters: {n_clusters}, Silhouette: {silhouette_avg:.3f}" if not np.isnan(silhouette_avg) else f"  Clusters: {n_clusters}")
+        # Not the clusterer's own silhouette printed above — this is the mean of the
+        # per-cluster silhouettes in the recap, so the two numbers differ.
+        print(f"  Clusters: {n_clusters}, mean per-cluster silhouette: {silhouette_avg:.3f}" if not np.isnan(silhouette_avg) else f"  Clusters: {n_clusters}")
 
-    # Generate chi-squared / Kruskal-Wallis test results
+    # Omnibus separability p-value per condition (exact Fisher r x c / chi-square / ANOVA)
     chi_res = make_chi_tests(results, sensitive_cols=sensitive_cols_analysis,
                              error_type=args.error_type, error_col=error_analysis_col,
                              continuous_sensitive_cols=continuous_sensitive_cols,
@@ -238,16 +237,19 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     chi_display.columns = ['Condition'] + err_sep_cols + sep_cols
     print(chi_display.to_string(index=False))
 
-    # Generate quality metrics
+    # error_analysis_col, not error_col: the Overview's error_sep is copied straight
+    # from chi_res, which was computed on the masked rate column. Reading the raw 0/1
+    # column here would put error_gap and error_sep on different quantities in the
+    # same row whenever --binary_error_metric is not 'raw'.
     all_quali = recap_quali_metrics(chi_res, results,
                                     sensitive_cols=sensitive_cols_analysis,
                                     continuous_sensitive_cols=continuous_sensitive_cols,
-                                    error_col=error_col,
+                                    error_col=error_analysis_col,
                                     error_type=args.error_type,
                                     multiclass_option=args.error_multiclass_option,
-                             error_cols=args.error_cols,
-                             error_cols_kind=args.error_cols_kind,
-                             sensitive_gap_test=args.sensitive_gap_test)
+                                    error_cols=args.error_cols,
+                                    error_cols_kind=args.error_cols_kind,
+                                    sensitive_gap_test=args.sensitive_gap_test)
 
     slabels = parse_label_map(getattr(args, 'sensitive_labels', None))
     if not args.no_plots:
@@ -260,7 +262,6 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                            title="Separability Test Results (p-values)")
       print(f"Saved: chi_res_heatmap.png")
 
-      # Create quality metrics heatmap
       skip_meta_quali = {'cond_descr', 'cond_name'}
       quali_viz_cols = [c for c in all_quali.columns if c not in skip_meta_quali]
       all_quali_viz = all_quali[quali_viz_cols].copy()
@@ -270,50 +271,59 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
       plt.close()
       print(f"Saved: all_quali_heatmap.png")
 
-    # Generate per-condition recap heatmaps and composition plots
     if not args.no_plots:
         print(f"\nGenerating {len(results['cond_name'])} recap heatmaps...")
         for i, cond_name in enumerate(results['cond_name']):
             recap = results['cond_recap'][i].copy()
-            if len(recap) > 1:  # Only plot if there are multiple clusters
+            if len(recap) > 1:
                 plot_cluster_recap_heatmap(recap, cond_name, output_dir, error_label=error_label,
                                            sensitive_labels=slabels)
                 plt.close()
         print(f"Saved: {len(results['cond_name'])} recap heatmaps")
 
-        # Per-condition cluster scatter plots
-        if args.projection != "none":
-            print(f"Generating cluster scatter plots...")
+        # Per-condition cluster scatter plots. --projection takes a comma-separated
+        # list, so parse it the same way the single-run path does; passing the raw
+        # string through would reject 'pca,tsne' inside reduce_dimensions, after
+        # every condition had already been clustered.
+        methods = parse_projection_list(args.projection)
+        if methods:
+            print(f"Generating cluster scatter plots ({', '.join(methods)})...")
             cat_names_set_viz = set(categorical_col_names or [])
-            for i, cond_name in enumerate(results['cond_name']):
-                res_df = results['cond_res'][i]
-                labels = res_df['clusters'].values
-                feature_set = exp_condition['feature_set'][i]
-                if len(set(labels) - {-1}) > 1:
-                    cond_clean = re.sub(r'\s+', '', cond_name)
-                    non_noise = labels != -1
-                    if args.distance == "gower" and args.projection == "mds":
-                        # MDS on per-condition Gower matrix (non-noise rows only)
-                        X_raw = res_df[feature_set].values[non_noise].astype(float)
-                        cat_idx = [j for j, c in enumerate(feature_set) if c in cat_names_set_viz] or None
-                        D = gower_distance(X_raw, cat_idx)
-                        X_2d = reduce_dimensions(D, method="mds", precomputed=True)
-                        plot_clusters(X_2d, labels[non_noise],
-                                      title=f"Clusters ({cond_name}, gower+MDS)",
-                                      out_path=f"{output_dir}/{cond_clean}_clusters.png")
-                    else:
-                        X_vals = res_df[feature_set].values[non_noise].astype(float)
-                        X = StandardScaler().fit_transform(X_vals)
-                        X_2d = reduce_dimensions(X, method=args.projection)
-                        plot_clusters(X_2d, labels[non_noise],
-                                      title=f"Clusters ({cond_name})",
-                                      out_path=f"{output_dir}/{cond_clean}_clusters.png")
-                    plt.close()
+            for method in methods:
+                for i, cond_name in enumerate(results['cond_name']):
+                    res_df = results['cond_res'][i]
+                    labels = res_df['clusters'].values
+                    feature_set = exp_condition['feature_set'][i]
+                    if len(set(labels) - {-1}) > 1:
+                        cond_clean = re.sub(r'\s+', '', cond_name)
+                        non_noise = labels != -1
+                        if args.distance == "gower" and method in ("tsne", "mds"):
+                            # Respect the cluster distance: project the per-condition
+                            # Gower matrix (non-noise rows only) rather than the raw features.
+                            X_raw = res_df[feature_set].values[non_noise].astype(float)
+                            cat_idx = [j for j, c in enumerate(feature_set) if c in cat_names_set_viz] or None
+                            D = gower_distance(X_raw, cat_idx)
+                            X_2d = reduce_dimensions(D, method=method, precomputed=True)
+                            title = f"Clusters ({cond_name}, gower+{method})"
+                        else:
+                            X_vals = res_df[feature_set].values[non_noise].astype(float)
+                            X = StandardScaler().fit_transform(X_vals)
+                            X_2d = reduce_dimensions(X, method=method)
+                            title = f"Clusters ({cond_name}, {method})"
+                        plot_clusters(X_2d, labels[non_noise], title=title,
+                                      out_path=f"{output_dir}/{cond_clean}_clusters_{method}.png")
+                        plt.close()
             print(f"Saved: cluster scatter plots")
 
-        # Composition bar plots per condition x sensitive attribute
+        # Composition bar plots per condition x sensitive attribute. This grows as
+        # conditions x attributes and is the bulk of the run's plotting cost, so
+        # --max_composition_plots caps the total.
+        max_comp = getattr(args, 'max_composition_plots', 0) or 0
         print(f"Generating composition plots...")
+        n_comp = 0
         for i, cond_name in enumerate(results['cond_name']):
+            if max_comp and n_comp >= max_comp:
+                break
             res_df = results['cond_res'][i]
             labels = res_df['clusters'].values
             if len(set(labels) - {-1}) > 1:
@@ -321,12 +331,15 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
                 for attr in sensitive_cols_analysis:
                     if attr in continuous_sensitive_cols:
                         continue
+                    if max_comp and n_comp >= max_comp:
+                        break
                     plot_cluster_composition(labels, res_df[attr].values, attr,
                         out_path=f"{output_dir}/{cond_clean}_composition_{attr}.png")
                     plt.close()
-        print(f"Saved: composition plots")
+                    n_comp += 1
+        capped = " (capped)" if max_comp and n_comp >= max_comp else ""
+        print(f"Saved: {n_comp} composition plots{capped}")
 
-    # --- CSV outputs ---
 
     # Global summary CSV (Overview): one row per condition.
     # Columns: condition, <metadata>, cond_name, n_clusters, silh,
@@ -359,7 +372,6 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
         summary_rows.append(row)
 
     summary_df = pd.DataFrame(summary_rows)
-    # Ensure 'condition' is the first column
     front_cols = ['condition'] + [c for c in summary_df.columns if c != 'condition']
     summary_df = summary_df[front_cols]
     summary_df.to_csv(f"{output_dir}/results_summary.csv", index=False)
@@ -368,7 +380,7 @@ def run_batch_experiment(df, args, output_dir, metadata=None):#
     # Per-condition result CSVs (individual level)
     # One CSV per condition at root level:
     #   - 1 row per cluster with a 'rule' (most distinctive sensitive feature)
-    #   - 1 OVERALL row with the KW stat test result
+    #   - 1 OVERALL row with the omnibus error separability p-value(s)
     all_cols_to_test = list(set(
         parse_column_list(args.regular_cols)
         + sensitive_cols

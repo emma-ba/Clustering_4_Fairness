@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from c4fairness.preprocessing import encode_categoricals
-from c4fairness.cli import _build_sensitive_analysis_list
+from c4fairness.cli import build_sensitive_analysis_list
 from c4fairness.clustering import cluster
 
 REGIONS = [
@@ -67,7 +67,7 @@ def test_euclidean_includes_multiclass_proxy_dummies_in_feature_matrix():
     assert "region" not in cl["proxy"]
     assert "region" not in dfe.columns
     # A proxy multi-class column must NOT leak into the *sensitive* analysis list.
-    analysis = _build_sensitive_analysis_list(cl["sensitive"], mcd, ["gender"])
+    analysis = build_sensitive_analysis_list(cl["sensitive"], mcd, ["gender"])
     assert analysis == ["gender"]
 
 
@@ -77,7 +77,7 @@ def test_analysis_list_dedup_under_euclidean():
     dfe, cl, catnames, mcd, ohe = encode_categoricals(
         _df(), col_lists, ["region"], "kmeans", distance="euclidean"
     )
-    analysis = _build_sensitive_analysis_list(cl["sensitive"], mcd, ["region", "gender"])
+    analysis = build_sensitive_analysis_list(cl["sensitive"], mcd, ["region", "gender"])
     assert len(analysis) == len(set(analysis)), "analysis list has duplicates"
     for d in mcd["region"]:
         assert analysis.count(d) == 1
@@ -109,7 +109,7 @@ def test_analysis_list_gower_drops_factorized_original():
     )
     # Gower keeps the factorized original in the feature matrix...
     assert "region" in cl["sensitive"]
-    analysis = _build_sensitive_analysis_list(cl["sensitive"], mcd, ["region", "gender"])
+    analysis = build_sensitive_analysis_list(cl["sensitive"], mcd, ["region", "gender"])
     # ...but analyses the readable dummies, never the float codes.
     assert "region" not in analysis
     for d in mcd["region"]:
