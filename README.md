@@ -9,7 +9,7 @@ composition vary across the discovered clusters — surfacing under-served subgr
 *without* pre-specifying the protected group. Works for **binary**, **multi-class**, and
 **regression** tasks.
 
-Made at **Vrije Universiteit Amsterdam (VU)**, in collaboration with the **University of
+Made at **Vrije Universiteit Amsterdam (VU)**, co-funded by **University of
 Twente (UT)**.
 
 ---
