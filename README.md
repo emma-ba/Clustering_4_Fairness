@@ -12,6 +12,8 @@ composition vary across the discovered clusters — surfacing under-served subgr
 Made at **Vrije Universiteit Amsterdam (VU)**, co-funded by **University of
 Twente (UT)**.
 
+📄 Paper: [*c4fairness: A Python Package for Clustering-based Fairness Analysis*](https://openreview.net/forum?id=OXTzc01W72) (BNAIC/BeNeLearn 2026) · [Cite](#citation)
+
 ---
 
 ## Install
@@ -378,4 +380,20 @@ Clustering_4_Fairness/
 │   └── images/               # heatmaps used in this README
 ├── tests/
 └── pyproject.toml
+```
+
+---
+
+## Citation
+
+If you use `c4fairness`, please cite:
+
+```bibtex
+@inproceedings{muntean2026cfairness,
+  title={c4fairness: A Python Package for Clustering-based Fairness Analysis},
+  author={Filip Muntean and Emma Beauxis-Aussalet},
+  booktitle={The 38th Benelux Conference on Artificial Intelligence and the 35th Belgian Dutch Conference on Machine Learning},
+  year={2026},
+  url={https://openreview.net/forum?id=OXTzc01W72}
+}
 ```
