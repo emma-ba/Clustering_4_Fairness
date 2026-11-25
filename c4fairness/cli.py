@@ -123,6 +123,11 @@ def apply_salient_reconstruction(df, multiclass_dummies, original_sensitive_cols
 
 
 def parse_args():
+    """Parse CLI arguments for clustering and fairness analysis. The function uses 
+    argparse to define and parse command-line arguments, returning the parsed arguments 
+    as a Namespace object. This makes it so that only defined arguments are accepted, 
+    and any unknown arguments will raise an error. Typing --help will display 
+    the available options and their descriptions."""
     parser = argparse.ArgumentParser(description="Clustering for fairness analysis")
 
     parser.add_argument(
